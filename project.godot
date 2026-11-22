@@ -26,4 +26,4 @@ window/handheld/orientation=1
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
-environment/defaults/default_clear_color=Color(0.965, 0.953, 0.918, 1)
+environment/defaults/default_clear_color=Color(0.059, 0.059, 0.059, 1)
