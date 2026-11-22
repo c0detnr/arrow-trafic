@@ -37,6 +37,8 @@ var plugin: Object
 
 var requested := false
 var _flow_pending := false
+## The plugin reported a failure this session: try again only in a later session.
+var _failed_this_session := false
 
 
 func _ready() -> void:
@@ -116,6 +118,7 @@ func save_data() -> void:
 func reset_for_tests() -> void:
 	requested = false
 	_flow_pending = false
+	_failed_this_session = false
 	if FileAccess.file_exists(save_path):
 		DirAccess.remove_absolute(save_path)
 
@@ -127,9 +130,10 @@ func is_requested() -> bool:
 
 
 ## Call after a win. Asks Google Play for the in-app review flow when every rule passes;
-## returns whether it did. At most once ever (persisted).
+## returns whether it did. At most once ever: persisted only when the plugin reports
+## review_flow_launched; a failure allows one more try in a later session (not this one).
 func maybe_request(total_cleared: int, last_stars: int) -> bool:
-	if requested or _flow_pending:
+	if requested or _flow_pending or _failed_this_session:
 		return false
 	if total_cleared < MIN_CLEARS or last_stars < REQUIRED_STARS:
 		return false
@@ -137,14 +141,18 @@ func maybe_request(total_cleared: int, last_stars: int) -> bool:
 		return false
 	if plugin == null and not debug_build:
 		return false   # release without plugin: inert, keep the one chance for a build that has it
-	requested = true
-	save_data()
 	if plugin == null:
+		_mark_requested()
 		print("Review (debug): in-app review would be requested now (no plugin)")
 		return true
 	_flow_pending = true
 	plugin.generate_review_info()
 	return true
+
+
+func _mark_requested() -> void:
+	requested = true
+	save_data()
 
 
 func _interstitial_too_recent() -> bool:
@@ -165,14 +173,18 @@ func _on_review_info_generated() -> void:
 
 func _on_review_info_generation_failed() -> void:
 	_flow_pending = false
+	_failed_this_session = true
 	push_warning("Review: review info generation failed")
 
 
 func _on_review_flow_launched() -> void:
 	# Finished; the card may not have been shown at all (Google quota), which is fine.
-	_flow_pending = false
+	if _flow_pending:
+		_flow_pending = false
+		_mark_requested()
 
 
 func _on_review_flow_launch_failed() -> void:
 	_flow_pending = false
+	_failed_this_session = true
 	push_warning("Review: review flow launch failed")

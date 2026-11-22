@@ -34,3 +34,33 @@ static func rewarded_unit_id(debug: bool) -> String:
 
 static func interstitial_unit_id(debug: bool) -> String:
 	return TEST_INTERSTITIAL_ID if debug or REAL_INTERSTITIAL_ID.is_empty() else REAL_INTERSTITIAL_ID
+
+
+## Project setting the AdMob plugin writes into the Android manifest.
+const APP_ID_SETTING := "admob/general/android/app_id"
+
+static var _release_problems_reported := false
+
+
+## What still makes a RELEASE build earn nothing (or test ads only). Empty when ready to ship.
+static func release_config_problems(app_id: String) -> Array[String]:
+	var problems: Array[String] = []
+	if REAL_REWARDED_ID.is_empty():
+		problems.append("REAL_REWARDED_ID is empty (release uses the Google TEST rewarded unit)")
+	if REAL_INTERSTITIAL_ID.is_empty():
+		problems.append("REAL_INTERSTITIAL_ID is empty (release uses the Google TEST interstitial unit)")
+	if app_id.is_empty() or app_id == TEST_APP_ID:
+		problems.append("%s is the Google TEST app id (or empty)" % APP_ID_SETTING)
+	return problems
+
+
+## Release-build startup check: push_error()s every problem, once per run. Test ids keep working,
+## so nothing crashes. Returns whether it reported anything this call.
+static func report_release_problems(app_id: String) -> bool:
+	if _release_problems_reported:
+		return false
+	_release_problems_reported = true
+	var problems := release_config_problems(app_id)
+	for problem in problems:
+		push_error("AdsConfig (RELEASE MISCONFIGURED): " + problem)
+	return not problems.is_empty()

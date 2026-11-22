@@ -249,15 +249,24 @@ func _on_purchase_updated(response: Dictionary) -> void:
 		var token := str(purchase.get("purchase_token", ""))
 		for id in purchase.get("product_ids", []):
 			var product_id := str(id)
-			if product_id == _purchasing:
-				_purchasing = ""
 			if state == PURCHASE_STATE_PURCHASED:
+				if product_id == _purchasing:
+					_purchasing = ""
 				_acknowledged[token] = bool(purchase.get("is_acknowledged", false))
 				listener._backend_purchase_succeeded(product_id, token)
 			elif state == PURCHASE_STATE_PENDING:
-				# Not paid yet (e.g. cash payment). Do not grant; Play sends another update (or the
-				# next startup query returns it as PURCHASED) once the payment completes.
+				# Not paid yet (e.g. cash payment). Do not grant; report "pending" (the UI shows a
+				# "payment pending" note) and free the purchase slot. Play sends another update, or
+				# the owned-purchases query (startup / app resume) returns it as PURCHASED, later.
+				if product_id == _purchasing:
+					_purchasing = ""
 				listener._backend_purchase_failed(product_id, "pending")
+	if not _purchasing.is_empty():
+		# OK update without our product in a known state (UNSPECIFIED, or only other purchases):
+		# never leave IAP waiting forever.
+		var stuck := _purchasing
+		_purchasing = ""
+		listener._backend_purchase_failed(stuck, "unknown_state")
 
 
 func _fail(product_id: String, code: int, debug_message: String) -> void:

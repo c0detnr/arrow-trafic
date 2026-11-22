@@ -136,17 +136,18 @@ func _today() -> String:
 	return str(today_provider.call())
 
 
+## Only a date AFTER the last claim counts (ISO "YYYY-MM-DD" strings compare chronologically), so
+## moving the device clock back and forth cannot farm the gift: an earlier date reads as "claimed".
 func can_claim_daily() -> bool:
-	return last_daily != _today()
+	return _today() > last_daily
 
 
-## Hints the next claim_daily() would grant right now (0 if already claimed today).
+## Hints the next claim_daily() would grant right now (0 if already claimed / clock moved back).
 ## For UI hints such as "Tomorrow: +3"; does not change any state.
 func next_daily_amount() -> int:
-	var today := _today()
-	if last_daily == today:
+	if not can_claim_daily():
 		return 0
-	return _daily_amount(_next_streak(today))
+	return _daily_amount(_next_streak(_today()))
 
 
 func _next_streak(today: String) -> int:
@@ -157,11 +158,11 @@ func _daily_amount(for_streak: int) -> int:
 	return DAILY_CYCLE_HINTS if for_streak % DAILY_CYCLE == 0 else DAILY_HINTS
 
 
-## Returns hints granted (0 if already claimed today).
+## Returns hints granted (0 if already claimed today or the date is before the last claim).
 func claim_daily() -> int:
-	var today := _today()
-	if last_daily == today:
+	if not can_claim_daily():
 		return 0
+	var today := _today()
 	streak = _next_streak(today)
 	last_daily = today
 	var amount := _daily_amount(streak)

@@ -12,7 +12,8 @@ extends Node
 ##   _backend_availability(available: bool)
 ##   _backend_products(details: Dictionary) # id -> {"price": String, "title": String}
 ##   _backend_purchase_succeeded(product_id: String, token: String)
-##   _backend_purchase_failed(product_id: String, message: String)  # "canceled", "pending" or store text
+##   _backend_purchase_failed(product_id: String, message: String)  # "canceled", "pending",
+##                                          # "unknown_state" or store text; always ends the purchase
 ##   _backend_restored(purchases: Array)    # [{"product_id": String, "token": String}, ...]
 ## Failure messages emitted by IAP itself: "unavailable", "unknown_product", "already_owned", "busy".
 
@@ -49,6 +50,13 @@ func _ready() -> void:
 	if backend == null:
 		backend = MockBillingBackend.new() if OS.is_debug_build() else NoBillingBackend.new()
 	backend.initialize(self)
+
+
+## Back from the background (another app, a pending payment completed, a promo code redeemed in
+## the Play Store): re-query owned purchases so they are granted and acknowledged right away.
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_RESUMED and _available and backend != null:
+		backend.restore_purchases()
 
 
 ## The Play Billing adapter, only when the plugin's native singleton AND its GDScript wrapper
@@ -118,8 +126,10 @@ func _grant(product_id: String, token: String) -> bool:
 			economy.set_ads_removed(true)
 	if token.is_empty() or economy.token_seen(token):
 		return false
-	economy.mark_token(token)
+	# Hints first, token second (each saves): a crash in between can at worst re-grant on the next
+	# delivery of this token, never lose a paid pack.
 	economy.add_hints(int(product.hints))
+	economy.mark_token(token)
 	return true
 
 
@@ -127,6 +137,11 @@ func _backend_availability(available: bool) -> void:
 	if available == _available:
 		return
 	_available = available
+	if not available and not _pending.is_empty():
+		# The store went away mid-purchase: release "busy" so the player can try again later.
+		var id := _pending
+		_pending = ""
+		purchase_failed.emit(id, "unavailable")
 	availability_changed.emit(available)
 	if available:
 		backend.query_products(PRODUCTS.keys())

@@ -12,12 +12,15 @@ extends Node
 ##   request_consent() -> void              # GDPR / UMP consent form when required
 ##   can_show_privacy_options() -> bool     # UMP "privacy options required" status
 ##   show_privacy_options() -> void
+##   on_app_resumed() -> void               # OPTIONAL: app back in foreground (e.g. retry consent)
 ## The backend reports back by calling these listener methods (any thread-safe deferral is the
 ## adapter's job; call them on the main thread):
 ##   _backend_rewarded_loaded(ok: bool)     # after load_rewarded() finishes
 ##   _backend_reward_earned()               # user watched enough to earn the reward
 ##   _backend_rewarded_closed()             # rewarded ad dismissed (always, earned or not)
 ##   _backend_interstitial_closed()         # interstitial dismissed or failed to show
+## and may ask (optional for the backend to use):
+##   _backend_wants_interstitial() -> bool  # false once "remove ads" is owned: do not load any
 
 ## Emitted whenever is_rewarded_ready() may have changed: a rewarded ad loaded or failed, a
 ## rewarded or interstitial ad started showing (false) or closed. May repeat the same value.
@@ -44,6 +47,7 @@ const MIN_SECONDS_AFTER_APP_START := 60.0
 ## Engine singleton registered by the Poing Studios AdMob plugin (godot-admob-plugin v5.x).
 const ADMOB_SINGLETON := "PoingGodotAdMob"
 const ADMOB_ADAPTER := "res://services/ads_admob.gd"
+const AdsConfig := preload("res://services/ads_config.gd")
 
 ## Active backend (see contract above). Never null after _ready().
 var backend: Object
@@ -75,9 +79,31 @@ func _ready() -> void:
 			_ads_supported = true
 		else:
 			backend = NoAdsBackend.new()
+	if not OS.is_debug_build():
+		AdsConfig.report_release_problems(str(ProjectSettings.get_setting(AdsConfig.APP_ID_SETTING, "")))
+	var economy := _economy()
+	if economy:
+		economy.ads_removed_changed.connect(_on_ads_removed_changed)
 	backend.initialize(self)
 	backend.load_rewarded()
-	backend.load_interstitial()
+	if _backend_wants_interstitial():
+		backend.load_interstitial()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_RESUMED and backend != null and backend.has_method("on_app_resumed"):
+		backend.on_app_resumed()
+
+
+func _on_ads_removed_changed(removed: bool) -> void:
+	if not removed:
+		backend.load_interstitial()   # e.g. a refunded purchase: interstitials are back
+
+
+## No interstitials are loaded (or shown) once "remove ads" is owned.
+func _backend_wants_interstitial() -> bool:
+	var economy := _economy()
+	return not (economy and economy.is_ads_removed())
 
 
 ## The AdMob adapter, only when the plugin's native singleton AND its GDScript wrappers exist
@@ -92,7 +118,7 @@ func _make_native_backend() -> Object:
 
 
 func _economy() -> Node:
-	return get_node_or_null("/root/Economy")
+	return get_node_or_null("/root/Economy") if is_inside_tree() else null
 
 
 ## Resets pacing state against the current clock.
@@ -181,7 +207,7 @@ func on_level_cleared(total_cleared: int) -> bool:
 	if now - last_rewarded_time < MIN_SECONDS_AFTER_REWARDED:
 		return false
 	if not backend.is_interstitial_loaded():
-		backend.load_interstitial()
+		backend.load_interstitial()   # ads_removed already returned above
 		return false
 	_interstitial_showing = true
 	_wins_since_interstitial = 0
@@ -196,7 +222,8 @@ func _backend_interstitial_closed() -> void:
 		return
 	_interstitial_showing = false
 	interstitial_closed.emit()
-	backend.load_interstitial()
+	if _backend_wants_interstitial():
+		backend.load_interstitial()
 	rewarded_ready_changed.emit(is_rewarded_ready())
 
 
@@ -223,6 +250,7 @@ class MockAdsBackend:
 	var listener: Object
 	var shown_rewarded: Array = []
 	var shown_interstitials := 0
+	var interstitial_loads := 0
 
 	func initialize(target: Object) -> void:
 		listener = target
@@ -245,7 +273,7 @@ class MockAdsBackend:
 		return true
 
 	func load_interstitial() -> void:
-		pass
+		interstitial_loads += 1
 
 	func show_interstitial() -> void:
 		shown_interstitials += 1

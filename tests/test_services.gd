@@ -52,6 +52,8 @@ func run() -> void:
 	await test_ads()
 	await test_ads_ready_signal()
 	await test_iap()
+	await test_ads_removed_no_interstitial_loads()
+	await test_iap_regressions()
 	economy.reset_for_tests()
 	print("test_services: ", "OK" if failures == 0 else "%d FAILED" % failures)
 	quit(1 if failures else 0)
@@ -101,6 +103,19 @@ func test_economy() -> void:
 	check(economy.next_daily_amount() == 3, "next daily is 3 on day 7 of the cycle")
 	fake_today = "2027-02-12"
 	check(economy.next_daily_amount() == 1 and economy.streak == 6, "gap: next daily falls back to 1")
+	# Regression: moving the device clock back and forth must not farm the daily gift.
+	economy.last_daily = ""
+	fake_today = "2027-03-10"
+	check(economy.claim_daily() == 1, "clock test: first claim")
+	var before_back: int = economy.get_hints()
+	for day in ["2027-03-09", "2026-01-01", "2027-03-10"]:
+		fake_today = day
+		check(not economy.can_claim_daily() and economy.next_daily_amount() == 0 and economy.claim_daily() == 0,
+			"daily_clock_back: %s after 2027-03-10 counts as claimed" % day)
+	check(economy.get_hints() == before_back and economy.last_daily == "2027-03-10" and economy.streak == 1,
+		"daily_clock_back: nothing granted, state unchanged")
+	fake_today = "2027-03-11"
+	check(economy.claim_daily() == 1 and economy.streak == 2, "daily_clock_back: next real day still claimable, streak kept")
 
 	# Stars and clears.
 	check(economy.stars_for(0) == 3 and economy.stars_for(1) == 2 and economy.stars_for(2) == 2 and economy.stars_for(3) == 1, "stars_for")
@@ -306,3 +321,79 @@ func test_iap() -> void:
 	iap.purchase("supporter_pack")
 	await frames()
 	check(iap.owns("supporter_pack") and economy.get_hints() == before + 40, "supporter pack")
+
+
+## Regression: no interstitial is loaded once "remove ads" is owned; un-removing reloads.
+func test_ads_removed_no_interstitial_loads() -> void:
+	economy.reset_for_tests()
+	economy.set_ads_removed(false)
+	var mock: Object = ads.backend
+	fake_now += 100000.0
+	ads.reset_for_tests()
+	fake_now += 1000.0
+	for i in ads.INTERSTITIAL_EVERY_CLEARS:
+		ads.on_level_cleared(300 + i)
+	check(ads._interstitial_showing, "ads_removed_no_loads: interstitial showing")
+	economy.set_ads_removed(true)   # bought while the ad is up
+	var loads: int = mock.interstitial_loads
+	await frames()   # mock closes it
+	check(mock.interstitial_loads == loads, "ads_removed_no_loads: no reload after close once ads removed")
+	check(not ads._backend_wants_interstitial(), "ads_removed_no_loads: backend told not to load")
+	fake_now += 10000.0
+	for i in 8:
+		ads.on_level_cleared(400 + i)
+	check(mock.interstitial_loads == loads, "ads_removed_no_loads: wins do not load interstitials")
+	# A fresh Ads node starting with ads already removed never preloads one.
+	var fresh: Node = load("res://services/ads.gd").new()
+	root.add_child(fresh)
+	check(fresh.backend.interstitial_loads == 0, "ads_removed_no_loads: no preload at startup")
+	fresh.free()
+	economy.set_ads_removed(false)
+	check(mock.interstitial_loads == loads + 1, "ads_removed_no_loads: ads back -> interstitial reloaded")
+	economy.reset_for_tests()
+
+
+func test_iap_regressions() -> void:
+	economy.reset_for_tests()
+	await frames()
+
+	# _grant saves the hints BEFORE marking the token (a crash in between must not lose the pack).
+	var seen_at_hint_save := []
+	var probe := func(_count: int) -> void:
+		var saved: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
+		seen_at_hint_save.append([economy.token_seen("order-tok"), int(saved.hints)])
+	economy.hints_changed.connect(probe)
+	var before: int = economy.get_hints()
+	iap._backend_purchase_succeeded("hints_10", "order-tok")
+	economy.hints_changed.disconnect(probe)
+	check(seen_at_hint_save == [[false, before + 10]], "grant_hints_before_token: hints saved before token marked: %s" % [seen_at_hint_save])
+	check(economy.token_seen("order-tok") and economy.get_hints() == before + 10, "grant_hints_before_token: both applied")
+
+	# Store going away mid-purchase releases "busy".
+	failed.clear()
+	iap._pending = "hints_30"
+	iap._backend_availability(false)
+	check(iap._pending.is_empty() and failed.back() == ["hints_30", "unavailable"], "iap_unavailable_clears_pending")
+	iap._backend_availability(true)
+	iap.purchase("hints_10")
+	check(failed.back() != ["hints_10", "busy"], "iap_unavailable_clears_pending: next purchase not busy")
+	await frames()
+
+	# Pending payment clears busy.
+	iap._pending = "hints_30"
+	iap._backend_purchase_failed("hints_30", "pending")
+	check(iap._pending.is_empty() and failed.back() == ["hints_30", "pending"], "iap_pending_clears_busy")
+
+	# App resume re-queries owned purchases (background / promo-code purchases).
+	var restored := [0]
+	var count_restore := func() -> void: restored[0] += 1
+	iap.products_updated.connect(count_restore)
+	iap.notification(Node.NOTIFICATION_APPLICATION_RESUMED)
+	await frames()
+	check(restored[0] == 1, "iap_resume_restores: restore on resume")
+	iap._available = false
+	iap.notification(Node.NOTIFICATION_APPLICATION_RESUMED)
+	await frames()
+	check(restored[0] == 1, "iap_resume_restores: not while unavailable")
+	iap._available = true
+	iap.products_updated.disconnect(count_restore)

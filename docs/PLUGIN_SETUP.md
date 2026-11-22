@@ -24,8 +24,10 @@
    (`TODO(sabah)`) alanlarına yaz. **Debug build'ler her zaman Google test id'lerini kullanır**; release
    build gerçek id boşsa yine test id'sine düşer (yani gerçek id girilmeden reklam geliri olmaz).
 6. AdMob konsolu → **Privacy & messaging → GDPR** mesajı oluştur ve yayımla (yoksa onay formu hiç gelmez).
-   Adaptör açılışta önce UMP onayını ister, form gerekiyorsa gösterir, sonra SDK'yı başlatır ve
-   1 rewarded + 1 interstitial ön-yükler. Ayarlar ekranında `Ads.can_show_privacy_options()` true ise
+   Adaptör açılışta önce UMP onayını ister, form gerekiyorsa gösterir; SDK'yı **yalnızca** onay durumu
+   NOT_REQUIRED veya OBTAINED ise başlatır ve 1 rewarded + 1 interstitial ön-yükler ("reklamları kaldır"
+   alınmışsa interstitial hiç yüklenmez). Onay yoksa (form kapandı / güncelleme hatası) reklam yüklenmez,
+   rewarded butonları gizli kalır; onay akışı artan aralıklarla ve uygulama öne geldiğinde yeniden denenir. Ayarlar ekranında `Ads.can_show_privacy_options()` true ise
    "Gizlilik seçenekleri" butonu göster → `Ads.show_privacy_options()`.
 7. (İsteğe bağlı) Türkiye'den GDPR formunu test etmek için: debug build'i cihazda çalıştır, logcat'te UMP'nin
    yazdığı hashed device id'yi `ads_config.gd → UMP_TEST_DEVICE_HASHED_IDS` içine koy → debug build EEA gibi davranır.
@@ -124,7 +126,8 @@ toplam ≥ 20 farklı seviye temizlenmiş, son seviye **3 yıldız**, son 60 sn 
 3. Sahneye `InappReview` node'u **ekleme**: `Review` autoload'ı, `InappReviewPlugin` singleton'ı varsa
    wrapper'ı kendisi oluşturur. Akış: `generate_review_info()` → `review_info_generated` sinyali →
    `launch_review_flow()` → `review_flow_launched` (başarısızlıkta `review_info_generation_failed` /
-   `review_flow_launch_failed`; sessizce yutulur, tekrar denenmez).
+   `review_flow_launch_failed`; sessizce yutulur). "İstendi" bilgisi yalnızca `review_flow_launched` gelince
+   kaydedilir; hata olursa aynı oturumda tekrar denenmez, sonraki oturumda (koşullar sağlanınca) bir kez daha denenir.
 4. Ek izin veya Play Console ayarı gerekmez. Ancak:
    - Akış yalnızca **Play Store'dan kurulmuş** build'de çalışır (internal testing / internal app sharing).
      `adb install` ile kurulan APK'da kart çıkmaz.

@@ -264,7 +264,7 @@ Tüm yanıtlar: `{ response_code: int, debug_message: String, ... }`
 
 ### 2.8 Önerilen akış (Arrow Traffic ürünleri)
 ```gdscript
-const NON_CONSUMABLE := ["remove_ads", "supporter_bundle"]
+const NON_CONSUMABLE := ["remove_ads", "supporter_pack"]
 const CONSUMABLE := {"hints_10": 10, "hints_30": 30}
 
 var billing := BillingClient.new()

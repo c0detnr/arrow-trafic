@@ -53,6 +53,9 @@ func run() -> void:
 	test_ads_config()
 	test_admob()
 	test_admob_through_ads()
+	test_admob_consent_gating()
+	test_admob_regressions()
+	test_release_config()
 	await test_billing()
 	root.get_node("Economy").reset_for_tests()
 	print("test_adapters: ", "OK" if failures == 0 else "%d FAILED" % failures)
@@ -122,6 +125,7 @@ func test_admob() -> void:
 	check(form.on_dismissed.is_valid() and fakes.mobile_ads.init_listener == null, "form shown, SDK waits")
 	admob.load_rewarded()
 	check(fakes.loads.is_empty(), "no loads before SDK init")
+	fakes.consent.status = 3  # OBTAINED once the user answered the form
 	form.on_dismissed.call(null)
 	check(fakes.mobile_ads.init_listener != null, "MobileAds.initialize after consent")
 	check(fakes.mobile_ads.request_config != null and fakes.mobile_ads.request_config.max_ad_content_rating == AdsConfig.MAX_AD_CONTENT_RATING,
@@ -230,7 +234,7 @@ func test_admob() -> void:
 	var admob3 := make_admob(fakes3)
 	admob3.initialize(FakeAdsListener.new())
 	fakes3.consent.on_failure.call(Bag.new())
-	check(fakes3.mobile_ads.init_listener != null, "consent failure still initializes SDK")
+	check(fakes3.mobile_ads.init_listener != null, "consent refresh failure with earlier NOT_REQUIRED status starts SDK")
 	timers.clear()
 
 
@@ -259,6 +263,160 @@ func test_admob_through_ads() -> void:
 	check(rewards[0] == 1 and got == [["hint", true]], "Ads: reward granted once, finished(hint, true)")
 	check(fakes.loads.size() == 3 and fakes.loads[2].kind == "rewarded", "Ads asked for the next rewarded")
 	ads.free()
+
+
+## A started adapter (consent not required → SDK initialized), timers cleared.
+func started_admob(fakes: AdMobFakes, listener: Object) -> RefCounted:
+	var admob := make_admob(fakes)
+	admob.initialize(listener)
+	fakes.consent.on_success.call()
+	fakes.mobile_ads.init_listener.on_initialization_complete.call(null)
+	timers.clear()
+	return admob
+
+
+## Regression (admob_consent_gating): no SDK / ads without usable consent; retried later.
+func test_admob_consent_gating() -> void:
+	timers.clear()
+	var fakes := AdMobFakes.new()
+	var listener := FakeAdsListener.new()
+	var admob := make_admob(fakes)
+	fakes.consent.form_available = true
+	fakes.consent.status = 2  # REQUIRED
+	admob.initialize(listener)
+	fakes.consent.on_success.call()
+	var form := FakeConsentForm.new()
+	fakes.ump.load_success.call(form)
+	form.on_dismissed.call(null)   # closed without an answer: still REQUIRED
+	check(fakes.mobile_ads.init_listener == null, "admob_consent_gating: REQUIRED after form -> SDK not started")
+	admob.load_rewarded()
+	admob.load_interstitial()
+	check(fakes.loads.is_empty() and not admob.is_rewarded_loaded(), "admob_consent_gating: no ads loaded, rewarded unavailable")
+	check(fire_timers() == [10.0] and fakes.consent.update_calls == 2, "admob_consent_gating: consent retried after backoff")
+	fakes.consent.status = 0  # UNKNOWN: refresh failed on a first launch
+	fakes.consent.on_failure.call(Bag.new())
+	check(fakes.mobile_ads.init_listener == null, "admob_consent_gating: update failure with UNKNOWN -> SDK not started")
+	check(timers.map(func(t: Array) -> float: return t[0]) == [30.0], "admob_consent_gating: backoff grows")
+	timers.clear()
+	admob.on_app_resumed()
+	check(fakes.consent.update_calls == 3, "admob_consent_gating: retried on app resume")
+	fakes.consent.status = 3  # OBTAINED
+	fakes.consent.on_success.call()
+	check(fakes.mobile_ads.init_listener != null, "admob_consent_gating: OBTAINED -> SDK starts")
+	fakes.mobile_ads.init_listener.on_initialization_complete.call(null)
+	check(fakes.loads.size() == 2, "admob_consent_gating: ads load once consent is usable")
+	admob.on_app_resumed()
+	check(fakes.consent.update_calls == 3, "admob_consent_gating: no consent refresh on resume once started")
+	timers.clear()
+
+	# Ads forwards app resume to the backend.
+	var ads: Node = load("res://services/ads.gd").new()
+	var fakes2 := AdMobFakes.new()
+	fakes2.consent.status = 0
+	var admob2 := make_admob(fakes2)
+	ads.backend = admob2
+	admob2.initialize(ads)
+	fakes2.consent.on_failure.call(Bag.new())
+	ads.notification(Node.NOTIFICATION_APPLICATION_RESUMED)
+	check(fakes2.consent.update_calls == 2 and not ads.is_rewarded_ready(), "admob_consent_gating: Ads resume -> consent retry")
+	ads.free()
+	timers.clear()
+
+
+func test_admob_regressions() -> void:
+	timers.clear()
+	var fakes := AdMobFakes.new()
+	var listener := FakeAdsListener.new()
+	var admob := started_admob(fakes, listener)
+	var now := [0.0]
+	admob.clock = func() -> float: return now[0]
+
+	# admob_expired_released: expired ads are destroyed AND their callbacks released.
+	var old_rewarded := FakeAd.new()
+	fakes.loads[0].callback.on_ad_loaded.call(old_rewarded)
+	var old_inter := FakeAd.new()
+	fakes.loads[1].callback.on_ad_loaded.call(old_inter)
+	now[0] = 56.0 * 60.0
+	check(not admob.is_rewarded_loaded() and not admob.is_interstitial_loaded(), "admob_expired_released: expired ads dropped")
+	for ad in [old_rewarded, old_inter]:
+		var cb: Object = ad.full_screen_content_callback
+		check(ad.destroyed and cb.on_ad_dismissed_full_screen_content.get_method() == "_ignore"
+			and cb.on_ad_failed_to_show_full_screen_content.get_method() == "_ignore",
+			"admob_expired_released: callbacks cleared")
+	check(fakes.loads.size() == 4, "admob_expired_released: both reloaded")
+
+	# admob_show_watchdog: no dismiss / show failure → closed after 60 s, reward only if earned.
+	listener.events.clear()
+	var ad := FakeAd.new()
+	fakes.loads[2].callback.on_ad_loaded.call(ad)
+	listener.events.clear()
+	admob.show_rewarded("hint")
+	ad.reward_listener.on_user_earned_reward.call(Bag.new())
+	check(fire_timers() == [admob.SHOW_WATCHDOG_SEC], "admob_show_watchdog: watchdog armed on show")
+	check(ad.destroyed, "admob_show_watchdog: stuck rewarded destroyed")
+	fire_timers()   # grace period
+	check(listener.events == ["earned", "closed"], "admob_show_watchdog: earned reward kept, closed once: %s" % [listener.events])
+	ad.full_screen_content_callback.on_ad_dismissed_full_screen_content.call()
+	fire_timers()
+	check(listener.events.count("closed") == 1, "admob_show_watchdog: late dismiss ignored")
+
+	listener.events.clear()
+	admob.load_rewarded()
+	var ad2 := FakeAd.new()
+	fakes.loads.back().callback.on_ad_loaded.call(ad2)
+	listener.events.clear()
+	admob.show_rewarded("revive")
+	fire_timers()
+	fire_timers()
+	check(listener.events == ["closed"], "admob_show_watchdog: no reward when not earned")
+	check(admob._showing_rewarded == null, "admob_show_watchdog: rewarded slot free again")
+
+	# Watchdog after a normal dismiss does nothing.
+	admob.load_rewarded()
+	var ad3 := FakeAd.new()
+	fakes.loads.back().callback.on_ad_loaded.call(ad3)
+	listener.events.clear()
+	admob.show_rewarded("hint")
+	ad3.full_screen_content_callback.on_ad_dismissed_full_screen_content.call()
+	fire_timers()
+	fire_timers()
+	check(listener.events == ["closed"], "admob_show_watchdog: normal dismiss closes once")
+
+	var inter := FakeAd.new()
+	fakes.loads[3].callback.on_ad_loaded.call(inter)
+	listener.events.clear()
+	admob.show_interstitial()
+	fire_timers()
+	check(listener.events == ["interstitial_closed"] and inter.destroyed and admob._showing_interstitial == null,
+		"admob_show_watchdog: stuck interstitial closed")
+	inter.full_screen_content_callback.on_ad_dismissed_full_screen_content.call()
+	check(listener.events.count("interstitial_closed") == 1, "admob_show_watchdog: late interstitial dismiss ignored")
+
+	# admob_no_interstitial_when_removed: the listener says no → nothing loaded, incl. at SDK start.
+	var fakes2 := AdMobFakes.new()
+	var listener2 := FakeAdsListener.new()
+	listener2.wants_interstitial = false
+	var admob2 := started_admob(fakes2, listener2)
+	check(fakes2.loads.size() == 1 and fakes2.loads[0].kind == "rewarded", "admob_no_interstitial_when_removed: only rewarded preloaded")
+	admob2.load_interstitial()
+	check(fakes2.loads.size() == 1, "admob_no_interstitial_when_removed: load_interstitial is a no-op")
+	listener2.wants_interstitial = true
+	admob2.load_interstitial()
+	check(fakes2.loads.size() == 2 and fakes2.loads[1].kind == "interstitial", "admob_no_interstitial_when_removed: loads again when wanted")
+	timers.clear()
+
+
+## Regression (release_config_check): release misconfiguration is detected and reported once.
+func test_release_config() -> void:
+	var expected := int(AdsConfig.REAL_REWARDED_ID.is_empty()) + int(AdsConfig.REAL_INTERSTITIAL_ID.is_empty())
+	check(AdsConfig.release_config_problems("ca-app-pub-1234567890123456~1234567890").size() == expected,
+		"release_config_check: real app id → only unit-id problems")
+	check(AdsConfig.release_config_problems(AdsConfig.TEST_APP_ID).size() == expected + 1, "release_config_check: test app id flagged")
+	check(AdsConfig.release_config_problems("").size() == expected + 1, "release_config_check: empty app id flagged")
+	var project_app_id := str(ProjectSettings.get_setting(AdsConfig.APP_ID_SETTING, ""))
+	AdsConfig._release_problems_reported = true   # as after the first report: never twice
+	check(not AdsConfig.report_release_problems(project_app_id), "release_config_check: reported at most once")
+	check(AdsConfig.rewarded_unit_id(false) != "" and AdsConfig.interstitial_unit_id(false) != "", "release_config_check: ids still usable")
 
 
 # --- Play Billing ---
@@ -343,10 +501,33 @@ func test_billing() -> void:
 	client.on_purchase_updated.emit(purchase_update([purchase_dict("hints_30", "tok-h30", 2, false)]))
 	await frames()
 	check(failed.back() == ["hints_30", "pending"] and economy.get_hints() == hints, "pending is not granted")
+	check(billing._purchasing.is_empty() and iap._pending.is_empty(), "billing_pending_clears_busy")
 	check(not client.consumed.has("tok-h30"), "pending is not consumed")
 	client.on_purchase_updated.emit(purchase_update([purchase_dict("hints_30", "tok-h30", 1, false)]))
 	await frames()
 	check(economy.get_hints() == hints + 30 and client.consumed.has("tok-h30"), "pending → purchased grants + consumes")
+
+	# Regression (billing_unknown_state_not_stuck): an OK update that does not settle our purchase
+	# (UNSPECIFIED state, another product only, or empty) reports failure instead of staying busy.
+	hints = economy.get_hints()
+	for update in [[purchase_dict("hints_10", "tok-unspec", 0, false)], [purchase_dict("remove_ads", "tok-ra", 1, true)], []]:
+		iap.purchase("hints_10")
+		client.on_purchase_updated.emit(purchase_update(update))
+		await frames()
+		check(failed.back() == ["hints_10", "unknown_state"] and iap._pending.is_empty() and billing._purchasing.is_empty(),
+			"billing_unknown_state_not_stuck: %s" % [update])
+	check(economy.get_hints() == hints and not client.consumed.has("tok-unspec"), "billing_unknown_state_not_stuck: nothing granted")
+	iap.purchase("hints_10")
+	check(failed.back() != ["hints_10", "busy"], "billing_unknown_state_not_stuck: next purchase not busy")
+	client.on_purchase_updated.emit({"response_code": 1, "debug_message": "User canceled"})
+	await frames()
+
+	# Regression (billing_resume_restores): app resume re-queries owned purchases.
+	var resume_queries: int = client.calls.count("query_purchases")
+	iap.notification(Node.NOTIFICATION_APPLICATION_RESUMED)
+	check(client.calls.count("query_purchases") == resume_queries + 1, "billing_resume_restores")
+	client.query_purchases_response.emit({"response_code": 0, "debug_message": "", "purchases": []})
+	await frames()
 
 	# Launch failure: already owned → failed + owned purchases re-queried.
 	var queries: int = client.calls.count("query_purchases")
@@ -390,10 +571,12 @@ func test_billing() -> void:
 	queries = client.calls.count("query_purchases")
 	check(fire_timers().size() == 1 and client.calls.count("query_purchases") == queries + 1, "failed ack retried")
 
-	# Disconnect → unavailable, reconnect scheduled.
+	# Disconnect → unavailable, reconnect scheduled. A purchase in flight is released.
 	timers.clear()
+	iap.purchase("hints_10")
 	client.disconnected.emit()
 	await frames()
+	check(failed.back() == ["hints_10", "unavailable"] and iap._pending.is_empty(), "billing_disconnect_clears_pending")
 	var starts: int = client.calls.count("start_connection")
 	check(not iap.is_available() and fire_timers().size() == 1, "disconnect schedules reconnect")
 	check(client.calls.count("start_connection") == starts + 1, "reconnects after disconnect")
@@ -554,6 +737,10 @@ class AdMobFakes:
 class FakeAdsListener:
 	extends RefCounted
 	var events: Array = []
+	var wants_interstitial := true
+
+	func _backend_wants_interstitial() -> bool:
+		return wants_interstitial
 
 	func _backend_rewarded_loaded(ok: bool) -> void:
 		events.append("loaded:%s" % ok)

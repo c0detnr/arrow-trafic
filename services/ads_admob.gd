@@ -6,7 +6,8 @@ extends RefCounted
 ## and exports without it. Plugin classes are load()ed by path into `api` at runtime; tests
 ## replace `api` with fakes. ads.gd only creates this adapter when is_plugin_available().
 ##
-## Flow: initialize() → UMP consent (form only when required) → MobileAds.initialize() →
+## Flow: initialize() → UMP consent (form only when required) → MobileAds.initialize() only when
+## consent is NOT_REQUIRED/OBTAINED (else retry with backoff / on app resume, no ads meanwhile) →
 ## preload one rewarded + one interstitial. Failed loads retry with backoff. Every ad object is
 ## single use and destroy()ed after it closes or fails to show.
 
@@ -33,7 +34,10 @@ const SCRIPTS := {
 }
 
 # Plugin enum values (ConsentInformation.gd / DebugGeography.gd, v5.1.0).
-const CONSENT_STATUS_REQUIRED := 2          # ConsentStatus {UNKNOWN, NOT_REQUIRED, REQUIRED, OBTAINED}
+# ConsentStatus {UNKNOWN, NOT_REQUIRED, REQUIRED, OBTAINED} (ump/api/ConsentInformation.gd, v5.1.0)
+const CONSENT_STATUS_NOT_REQUIRED := 1
+const CONSENT_STATUS_REQUIRED := 2
+const CONSENT_STATUS_OBTAINED := 3
 const PRIVACY_OPTIONS_REQUIRED := 2         # PrivacyOptionsRequirementStatus {UNKNOWN, NOT_REQUIRED, REQUIRED}
 const DEBUG_GEOGRAPHY_EEA := 1              # DebugGeography.Values {DISABLED, EEA, NOT_EEA}
 
@@ -46,6 +50,10 @@ const AD_MAX_AGE_SEC := 55.0 * 60.0
 ## The SDK reports "reward earned" before "dismissed", but both hop threads; give a late reward
 ## this long to arrive before telling Ads that the rewarded ad closed.
 const REWARD_GRACE_SEC := 0.3
+## If neither "dismissed" nor "failed to show" arrives this long after show(), treat the ad as
+## closed so ads are not disabled for the rest of the session. Counts game time, which normally
+## stands still while the ad's own activity covers the game.
+const SHOW_WATCHDOG_SEC := 60.0
 
 ## Plugin "classes": name → GDScript (static calls / .new()) or, in tests, a fake object for
 ## the static ones (MobileAds, UserMessagingPlatform) and a Callable factory for the others.
@@ -59,6 +67,8 @@ var debug_build := OS.is_debug_build()
 
 var listener: Object
 var _consent_running := false
+var _consent_failures := 0
+var _consent_retry_pending := false
 var _sdk_started := false
 var _sdk_ready := false
 
@@ -68,6 +78,8 @@ var _rewarded_loading := false
 var _rewarded_failures := 0
 var _rewarded_retry_pending := false
 var _showing_rewarded: Object
+## The showing rewarded ad already reported dismissed / failed (closing after the grace period).
+var _rewarded_dismissed := false
 var _reward_listener: Object
 
 var _interstitial_ad: Object
@@ -175,9 +187,44 @@ func _on_consent_failed(form_error) -> void:
 	_consent_finished()
 
 
+## Starts the SDK only when Google allows requesting ads (consent NOT_REQUIRED or OBTAINED, which
+## may also come from an earlier session after a failed refresh). Otherwise no ads are loaded and
+## the consent flow is retried with backoff and on app resume (on_app_resumed()).
 func _consent_finished() -> void:
 	_consent_running = false
-	_start_sdk()
+	if _can_request_ads():
+		_consent_failures = 0
+		_start_sdk()
+	elif not _sdk_started:
+		push_warning("AdsAdMob: no usable consent yet; ads stay off, retrying later")
+		_schedule_consent_retry()
+
+
+func _can_request_ads() -> bool:
+	if _ump() == null:
+		return false
+	var status := int(_ump().consent_information.get_consent_status())
+	return status == CONSENT_STATUS_NOT_REQUIRED or status == CONSENT_STATUS_OBTAINED
+
+
+func _schedule_consent_retry() -> void:
+	if _consent_retry_pending:
+		return
+	_consent_retry_pending = true
+	schedule.call(_retry_delay(_consent_failures), _retry_consent)
+	_consent_failures += 1
+
+
+func _retry_consent() -> void:
+	_consent_retry_pending = false
+	if not _sdk_started:
+		request_consent()
+
+
+## Optional contract hook, called by ads.gd on NOTIFICATION_APPLICATION_RESUMED.
+func on_app_resumed() -> void:
+	if not _sdk_started:
+		request_consent()
 
 
 func _start_sdk() -> void:
@@ -220,6 +267,7 @@ func show_privacy_options() -> void:
 func is_rewarded_loaded() -> bool:
 	if _rewarded_ad != null and _now() - _rewarded_loaded_at > AD_MAX_AGE_SEC:
 		_rewarded_ad.destroy()
+		_release(_rewarded_ad)
 		_rewarded_ad = null
 		load_rewarded()
 	return _rewarded_ad != null
@@ -275,9 +323,18 @@ func show_rewarded(_placement: String) -> void:
 		return
 	_rewarded_ad = null
 	_showing_rewarded = ad
+	_rewarded_dismissed = false
 	_reward_listener = _new("OnUserEarnedRewardListener")
 	_reward_listener.on_user_earned_reward = _on_reward_earned.bind(ad)
+	schedule.call(SHOW_WATCHDOG_SEC, _rewarded_watchdog.bind(ad))
 	ad.show(_reward_listener)
+
+
+## No dismiss / show failure in time: close it like a dismiss (reward only if already earned).
+func _rewarded_watchdog(ad: Object) -> void:
+	if ad == _showing_rewarded and not _rewarded_dismissed:
+		push_warning("AdsAdMob: rewarded ad never reported closing; closing it")
+		_on_rewarded_done(ad)
 
 
 func _on_reward_earned(_item, ad: Object) -> void:
@@ -291,8 +348,9 @@ func _on_rewarded_show_failed(error, ad: Object) -> void:
 
 
 func _on_rewarded_done(ad: Object) -> void:
-	if ad != _showing_rewarded:
+	if ad != _showing_rewarded or _rewarded_dismissed:
 		return
+	_rewarded_dismissed = true
 	ad.destroy()
 	_release(ad)
 	# Keep _showing_rewarded until the grace period ends so a late reward still counts.
@@ -314,13 +372,14 @@ func _finish_rewarded(ad: Object) -> void:
 func is_interstitial_loaded() -> bool:
 	if _interstitial_ad != null and _now() - _interstitial_loaded_at > AD_MAX_AGE_SEC:
 		_interstitial_ad.destroy()
+		_release(_interstitial_ad)
 		_interstitial_ad = null
 		load_interstitial()
 	return _interstitial_ad != null
 
 
 func load_interstitial() -> void:
-	if not _sdk_ready:
+	if not _sdk_ready or not _listener_wants_interstitial():
 		return
 	if _interstitial_ad != null or _interstitial_loading or _interstitial_retry_pending:
 		return
@@ -363,7 +422,14 @@ func show_interstitial() -> void:
 		return
 	_interstitial_ad = null
 	_showing_interstitial = ad
+	schedule.call(SHOW_WATCHDOG_SEC, _interstitial_watchdog.bind(ad))
 	ad.show()
+
+
+func _interstitial_watchdog(ad: Object) -> void:
+	if ad == _showing_interstitial:
+		push_warning("AdsAdMob: interstitial never reported closing; closing it")
+		_on_interstitial_done(ad)
 
 
 func _on_interstitial_show_failed(error, ad: Object) -> void:
@@ -381,6 +447,13 @@ func _on_interstitial_done(ad: Object) -> void:
 
 
 # --- Helpers ---
+
+## Optional listener hook (ads.gd: false once "remove ads" is owned). Missing → true.
+func _listener_wants_interstitial() -> bool:
+	if listener == null or not listener.has_method("_backend_wants_interstitial"):
+		return true
+	return listener._backend_wants_interstitial()
+
 
 ## Replaces the ad's callbacks (which hold Callables bound to the ad itself) with no-ops, so the
 ## destroyed wrapper object is not kept alive by a reference cycle.
