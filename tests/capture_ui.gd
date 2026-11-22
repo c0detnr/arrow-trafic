@@ -1,6 +1,7 @@
 extends SceneTree
 
-# XDG_DATA_HOME=$(mktemp -d) godot --path . --script tests/capture_ui.gd -- <output.png> <width> <height> <level> <state> <theme>
+# XDG_DATA_HOME=$(mktemp -d) godot --path . --script tests/capture_ui.gd -- <output.png> <width> <height> <level> <state> <theme> [taps]
+# States: playing, mid, won, home, settings, shop, daily (gift claimed + toast), hint (highlighted hint), lost (revive panel).
 func _initialize() -> void:
 	if FileAccess.file_exists("user://save.json"):
 		printerr("Use an empty XDG_DATA_HOME for captures.")
@@ -28,13 +29,35 @@ func capture() -> void:
 	viewport.add_child(game)
 	var state := args[4] if args.size() > 4 else "playing"
 	game.start(level)
-	if state not in ["home", "settings"]:
+	if state not in ["home", "settings", "shop", "daily"]:
 		game.play_button.pressed.emit()
 	elif state == "settings":
 		game.settings_button.pressed.emit()
+	elif state == "shop":
+		game.shop_button.pressed.emit()
+	elif state == "daily":  # claim the gift so the toast shows
+		game.daily_button.pressed.emit()
 	if game.theme_name != selected_theme:
 		game._toggle_theme()
 	var win: Tween
+	if state in ["hint", "lost"]:  # a couple of real moves so the queue and pocket are in use
+		for _k in int(args[6]) if args.size() > 6 else 2:
+			var pick: int = game.Logic.hint(game.s)
+			if pick >= 0:
+				game._tap(game.origin + (Vector2(game.Logic.head(game.s.arrows[pick])) + Vector2.ONE * 0.5) * game.cell)
+	if state == "hint":
+		game.hint_button.pressed.emit()
+	elif state == "lost":
+		var guard := 0
+		while game.s.status == "playing":
+			guard += 1
+			if guard > 6:  # force the overflow if the level keeps letting colours through
+				game.s.cap = game.s.pocket.size()
+			var pick := -1
+			for i in game.s.arrows.size():
+				if game.Logic.can_exit(game.s, i) and (pick == -1 or game.s.queue.is_empty() or game.s.arrows[i].color != game.s.queue[0]):
+					pick = i
+			game._tap(game.origin + (Vector2(game.Logic.head(game.s.arrows[pick])) + Vector2.ONE * 0.5) * game.cell)
 	if state == "mid":  # play N exitable arrows so the queue and pocket look lived-in
 		for _k in int(args[6]) if args.size() > 6 else 4:
 			for i in game.s.arrows.size():

@@ -44,6 +44,33 @@ const ENGLISH_TEXT := {
 	"Ana ekran": "Home",
 	"Çıkışı açık bir oka dokun.": "Tap an arrow with a clear path.",
 	"Sırası gelmeyen renkler cepte bekler.": "Colors not yet called wait in the pocket.",
+	"Bölüm %02d · ★ %d": "Level %02d · ★ %d",
+	"İpucu": "Hint",
+	"İpucu, %d kaldı": "Hint, %d left",
+	"Buradan çıkış yok — geri al veya yeniden başlat": "No way out from here — undo or restart",
+	"Reklam izle · Geri al": "Watch ad · Undo",
+	"1 ipucu ile geri al": "Undo for 1 hint",
+	"Mağaza": "Shop",
+	"İpuçların: %d": "Your hints: %d",
+	"Reklam izle · +1 ipucu": "Watch ad · +1 hint",
+	"10 ipucu": "10 hints",
+	"30 ipucu": "30 hints",
+	"Reklamları kaldır (+5 ipucu)": "Remove ads (+5 hints)",
+	"Destekçi paketi: reklamsız + 40 ipucu": "Supporter pack: no ads + 40 hints",
+	"Satın alındı ✓": "Owned ✓",
+	"Mağaza şu an kullanılamıyor": "Store unavailable right now",
+	"Teşekkürler!": "Thank you!",
+	"Satın alma tamamlanmadı": "Purchase didn't go through",
+	"Günlük hediye: +1 ipucu": "Daily gift: +1 hint",
+	"Günlük hediye: +%d ipucu": "Daily gift: +%d hints",
+	"+1 ipucu · Seri %d gün": "+1 hint · %d-day streak",
+	"+%d ipucu · Seri %d gün": "+%d hints · %d-day streak",
+	"+1 ipucu": "+1 hint",
+	"+1 ipucu bonusu": "+1 bonus hint",
+	"+%d ipucu bonusu": "+%d bonus hints",
+	"Satın alımları geri yükle": "Restore purchases",
+	"Satın alımlar kontrol ediliyor": "Checking your purchases",
+	"Gizlilik seçenekleri": "Privacy options",
 }
 const HUD_ICONS := {
 	"remaining": preload("res://assets/remaining.svg"),
@@ -51,6 +78,29 @@ const HUD_ICONS := {
 	"queue": preload("res://assets/queue.svg"),
 	"pocket": preload("res://assets/pocket.svg"),
 }
+const ICONS := {
+	"hint": preload("res://assets/hint.svg"),
+	"shop": preload("res://assets/shop.svg"),
+	"ad": preload("res://assets/ad.svg"),
+	"gift": preload("res://assets/gift.svg"),
+	"undo": preload("res://assets/undo.svg"),
+	"star": preload("res://assets/star.svg"),
+}
+## Store rows in display order with their Turkish names (English via ENGLISH_TEXT).
+const SHOP_PRODUCTS := {
+	"hints_10": "10 ipucu",
+	"hints_30": "30 ipucu",
+	"remove_ads": "Reklamları kaldır (+5 ipucu)",
+	"supporter_pack": "Destekçi paketi: reklamsız + 40 ipucu",
+}
+const HISTORY_LIMIT := 30
+## Consecutive blocked taps before the hint button pulses once.
+const STUCK_TAPS := 3
+## The hint button draws 88px but takes a 100px touch target (44pt on a 320pt-wide phone).
+const HINT_TARGET := 100.0
+const HINT_INSET := 6.0
+const TOUCH_MIN := 100.0
+const TOAST_SECONDS := 1.8
 
 var levels: Array = []
 var idx := 0
@@ -95,6 +145,36 @@ var mascot_state := "idle"
 var mascot_blink_in := randf_range(2.0, 5.0)
 var mascot_tween: Tween
 var language := OS.get_locale_language()
+# Monetization UI
+var hint_button: Button
+var hint_badge: PanelContainer
+var hint_badge_label: Label
+var hint_badge_icon: TextureRect
+var hint_nudge: Tween
+var hinted_id := -1
+var history: Array = []  # Logic.snapshot before each successful move, newest last
+var blocked_streak := 0
+var win_stars := 0
+var revive_ad_button: Button
+var revive_hint_button: Button
+var shop_button: Button
+var shop_veil: ColorRect
+var shop_panel: PanelContainer
+var shop_title: Label
+var shop_hints_label: Label
+var shop_scroll: ScrollContainer
+var shop_list: VBoxContainer
+var shop_ad_button: Button
+var shop_rows := {}  # product id -> Button
+var shop_unavailable: Label
+var shop_close: Button
+var shop_return_focus: Control
+var daily_button: Button
+var restore_button: Button
+var privacy_button: Button
+var toast: PanelContainer
+var toast_label: Label
+var toast_tween: Tween
 
 
 func _ready() -> void:
@@ -104,15 +184,22 @@ func _ready() -> void:
 		return
 	_build_ui()
 	get_viewport().size_changed.connect(_layout)
+	Economy.hints_changed.connect(_on_hints_changed)
+	Ads.rewarded_ready_changed.connect(_on_rewarded_ready_changed)
+	IAP.products_updated.connect(_refresh_wallet)
+	IAP.availability_changed.connect(_on_store_availability)
+	IAP.purchase_completed.connect(_on_purchase_completed)
+	IAP.purchase_failed.connect(_on_purchase_failed)
 	var save := _load_save()
 	var saved_theme = save.get("theme", "dark")
 	_apply_theme(saved_theme if THEMES.has(saved_theme) else "dark")
 	start(clampi(int(save.get("level", 0)), 0, levels.size() - 1))
 	_show_home(true)
+	Ads.request_consent.call_deferred()
 
 
 func _localized(turkish: String) -> String:
-	return turkish if language == "tr" else ENGLISH_TEXT[turkish]
+	return turkish if language == "tr" else ENGLISH_TEXT.get(turkish, turkish)
 
 
 func _load_levels() -> Array:
@@ -152,26 +239,36 @@ func start(i: int, entering := false) -> void:
 	input_locked = entering
 	idx = i
 	_save()
-	for n in board_layer.get_children():
-		n.hide()
-		n.queue_free()
-	nodes.clear()
-	if landing_tween:
-		landing_tween.kill()
-	landing = 1.0
 	s = Logic.new_state(levels[idx])
+	history.clear()
+	blocked_streak = 0
+	win_stars = 0
 	if mascot_tween:
 		mascot_tween.kill()
 		mascot_tween = null
 	mascot.rotation = 0.0
 	_update_mascot_mood()
-	_layout()
-	for a in s.arrows:
-		_make_arrow(a)
+	_rebuild_board()
 	panel.visible = false
 	veil.visible = false
 	retry.disabled = input_locked
+	_refresh_hint_button()
 	queue_redraw()
+
+
+## Re-creates every arrow node from s.arrows (used by start and by revive/undo).
+func _rebuild_board() -> void:
+	for n in board_layer.get_children():
+		n.hide()
+		n.queue_free()
+	nodes.clear()
+	hinted_id = -1
+	if landing_tween:
+		landing_tween.kill()
+	landing = 1.0
+	_layout()
+	for a in s.arrows:
+		_make_arrow(a)
 
 
 func _layout() -> void:
@@ -189,9 +286,17 @@ func _layout() -> void:
 	_move_board(board_offset)
 	retry.position = Vector2(vs.x - left - retry.size.x, 48)
 	home_button.position = retry.position + Vector2(-home_button.size.x - 12, (retry.size.y - home_button.size.y) * 0.5)
+	# Visual 88px button sits 16px left of Home; its touch rect extends HINT_INSET past that.
+	hint_button.size = Vector2.ONE * HINT_TARGET
+	hint_button.position = Vector2(home_button.position.x - 16 - (HINT_TARGET - HINT_INSET), retry.position.y - HINT_INSET)
+	hint_button.pivot_offset = hint_button.size * 0.5
 	_layout_home(vs)
 	veil.size = vs
+	panel.reset_size()
 	panel.position = (vs - panel.size) * 0.5
+	_layout_shop(vs)
+	if toast.visible:
+		_place_toast()
 	for a in s.arrows:
 		if nodes.has(a.id):
 			var n: Node2D = nodes[a.id]
@@ -233,6 +338,15 @@ func _make_arrow(a: Dictionary) -> void:
 		var col: Color = palette.arrows[a.color]
 		var tip := head + d * cell * 0.34
 		var neck := head - d * cell * 0.14
+		if int(a.id) == hinted_id:
+			# Opaque halo (surface blended toward accent) so overlapping shapes leave no seams.
+			var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() * 0.005)
+			var halo: Color = palette.surface.lerp(palette.accent, 0.55 + 0.35 * pulse)
+			var grow := cell * (0.08 + 0.06 * pulse)
+			n.draw_line(tail, head, halo, cell * 0.34 + grow * 2, true)
+			n.draw_circle(tail, cell * 0.17 + grow, halo, true, -1, true)
+			n.draw_colored_polygon(PackedVector2Array([tip + d * grow * 1.4, neck - d * grow + side * (cell * 0.32 + grow * 1.2),
+				neck - d * grow - side * (cell * 0.32 + grow * 1.2)]), halo)
 		n.draw_line(tail, head, col, cell * 0.34, true)
 		n.draw_circle(tail, cell * 0.17, col, true, -1, true)
 		n.draw_colored_polygon(PackedVector2Array([tip, neck + side * cell * 0.32, neck - side * cell * 0.32]), col)
@@ -244,7 +358,9 @@ func _make_arrow(a: Dictionary) -> void:
 func _notification(what: int) -> void:
 	if what != NOTIFICATION_WM_GO_BACK_REQUEST or not is_node_ready() or not home_screen:
 		return
-	if settings_veil.visible:
+	if shop_veil.visible:
+		_show_shop(false)
+	elif settings_veil.visible:
 		_show_settings(false)
 	elif not home_screen.visible:
 		_show_home(true)
@@ -253,8 +369,11 @@ func _notification(what: int) -> void:
 
 
 func _unhandled_input(e: InputEvent) -> void:
-	if e.is_action_pressed("ui_cancel") and settings_veil.visible:
-		_show_settings(false)
+	if e.is_action_pressed("ui_cancel") and (shop_veil.visible or settings_veil.visible):
+		if shop_veil.visible:
+			_show_shop(false)
+		else:
+			_show_settings(false)
 		get_viewport().set_input_as_handled()
 		return
 	if e is InputEventScreenTouch and e.pressed:
@@ -266,14 +385,27 @@ func _unhandled_input(e: InputEvent) -> void:
 
 
 func _tap(pos: Vector2) -> void:
-	if s.is_empty() or home_screen.visible or input_locked or s.status != "playing":
+	if s.is_empty() or home_screen.visible or shop_veil.visible or input_locked or s.status != "playing":
 		return
 	var i := Logic.arrow_at(s, Vector2i(((pos - origin) / cell).floor()))
 	if i < 0:
 		return
 	var a: Dictionary = s.arrows[i]
 	var n: Node2D = nodes[a.id]
+	if Logic.can_exit(s, i):
+		history.append(Logic.snapshot(s))
+		if history.size() > HISTORY_LIMIT:
+			history.pop_front()
 	var r := Logic.tap(s, i)
+	if r == "blocked":
+		blocked_streak += 1
+		if blocked_streak >= STUCK_TAPS:
+			blocked_streak = 0
+			_nudge_hint()
+	else:
+		blocked_streak = 0
+		# Any real move changes the state, so an older hint no longer applies.
+		hinted_id = -1
 	if r != "blocked" and landing_tween:
 		landing_tween.kill()
 		landing = 1.0
@@ -297,14 +429,17 @@ func _tap(pos: Vector2) -> void:
 		t.parallel().tween_property(n, "modulate:a", 0.0, 0.3)
 		t.tween_callback(n.queue_free)
 		if r == "won":
+			var clear: Dictionary = Economy.record_clear(idx, s.mistakes)
+			win_stars = int(clear.stars)
+			if int(clear.bonus_hints) > 0:
+				var bonus := int(clear.bonus_hints)
+				_toast(_localized("+1 ipucu bonusu") if bonus == 1 else _localized("+%d ipucu bonusu") % bonus)
 			_celebrate_win(t)
 		elif r == "lost":
-			panel_label.text = _localized("Cep doldu")
-			panel.visible = true
-			veil.visible = true
-			retry.disabled = true
+			_show_loss_panel()
 		if r != "won" and mascot_state != "blocked":
 			_update_mascot_mood()
+	_refresh_hint_button()
 	queue_redraw()
 
 
@@ -328,7 +463,10 @@ func _celebrate_win(t: Tween) -> void:
 	t.tween_callback(func():
 		input_locked = false
 		retry.disabled = false
-		win_tween = null)
+		win_tween = null
+		_refresh_hint_button()
+		# Wins only: Ads applies its own pacing and usually shows nothing.
+		Ads.on_level_cleared(Economy.levels_cleared))
 
 
 func _show_celebration(progress: float) -> void:
@@ -359,6 +497,8 @@ func _shake_mascot() -> void:
 
 
 func _process(delta: float) -> void:
+	if hinted_id != -1 and nodes.has(hinted_id):
+		nodes[hinted_id].queue_redraw()
 	if mascot_state != "idle" or not mascot:
 		return
 	mascot_blink_in -= delta
@@ -444,7 +584,8 @@ func _draw() -> void:
 	var vs := get_viewport_rect().size
 	draw_rect(Rect2(Vector2.ZERO, vs), palette.cream)
 	var width := vs.x - 2 * left
-	_text(Vector2(left, 112), _localized("Bölüm %02d") % (idx + 1), 50, palette.ink, -1, HORIZONTAL_ALIGNMENT_LEFT, true)
+	var title := _localized("Bölüm %02d") % (idx + 1)
+	_text(Vector2(left, 112), title, _title_font_size(title), palette.ink, -1, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 	# The queue's first item gets a fixed slot; the preview fits the remaining width.
 	draw_texture_rect(HUD_ICONS.queue, Rect2(left, 180, 28, 28), false, palette.accent)
@@ -468,6 +609,13 @@ func _draw() -> void:
 	if celebration > 0.0 and celebration < 1.0:
 		var opacity := smoothstep(0.0, 0.2, celebration) * (1.0 - smoothstep(0.72, 1.0, celebration))
 		_text(Vector2(left, 353), _localized("Tamamlandı"), 26, Color(palette.accent, opacity), width, HORIZONTAL_ALIGNMENT_CENTER, true)
+		# Earned stars pop in one by one where the (now empty) queue was.
+		for k in 3 if win_stars > 0 else 0:
+			var pop := smoothstep(0.04 + 0.08 * k, 0.2 + 0.08 * k, celebration)
+			var star_size := 46.0 * (0.6 + 0.4 * pop)
+			var center := Vector2(vs.x * 0.5 + (k - 1) * 62, 259)
+			var tint: Color = palette.accent if k < win_stars else palette.grid
+			draw_texture_rect(ICONS.star, Rect2(center - Vector2.ONE * star_size * 0.5, Vector2.ONE * star_size), false, Color(tint, opacity * pop))
 
 	draw_texture_rect(HUD_ICONS.pocket, Rect2(left, pocket_y - 51, 28, 28), false, palette.ink)
 	_text(Vector2(left + 40, pocket_y - 28), _localized("Geçici cep"), 26, palette.ink)
@@ -523,6 +671,9 @@ func _style_button(b: Button) -> void:
 	b.add_theme_stylebox_override("normal", _style(palette.accent, 18))
 	b.add_theme_stylebox_override("hover", _style(palette.accent.lightened(0.14), 18))
 	b.add_theme_stylebox_override("pressed", _style(palette.accent.darkened(0.14), 18))
+	b.add_theme_stylebox_override("disabled", _style(Color(palette.accent, 0.4), 18))
+	b.add_theme_color_override("font_disabled_color", Color(palette.cream, 0.75))
+	b.add_theme_color_override("icon_disabled_color", Color(palette.cream, 0.75))
 	var focus := _style(Color.TRANSPARENT, 18)
 	focus.set_border_width_all(3)
 	focus.border_color = palette.ink
@@ -539,17 +690,54 @@ func _apply_theme(next_theme: String) -> void:
 	mascot_body = _style(palette.accent, 10)
 	mascot_body.anti_aliasing_size = 0.15
 	mascot.queue_redraw()
-	for button in [retry, home_button, panel_retry, play_button, settings_button, theme_button, settings_close]:
+	for button in [retry, home_button, panel_retry, play_button, settings_button, theme_button, settings_close,
+			hint_button, revive_ad_button, shop_ad_button]:
 		_style_button(button)
 	retry.add_theme_color_override("icon_normal_color", palette.ink)
 	retry.add_theme_color_override("icon_hover_color", palette.cream)
 	retry.add_theme_color_override("icon_pressed_color", palette.cream)
+	retry.add_theme_color_override("icon_disabled_color", Color(palette.ink, 0.3))
+	_inset_button(hint_button, HINT_INSET)
 	panel_label.add_theme_color_override("font_color", palette.ink)
 	home_screen.color = palette.cream
 	home_art.queue_redraw()
-	_style_neutral_button(settings_button)
-	_style_neutral_button(settings_close)
+	for button in [settings_button, settings_close, shop_button, restore_button, privacy_button, shop_close, daily_button]:
+		_style_neutral_button(button)
+	_style_neutral_button(revive_hint_button, palette.cream)
+	_tint_content(revive_ad_button, palette.cream)
+	_tint_content(revive_hint_button, palette.ink)
+	for id in shop_rows:
+		_style_neutral_button(shop_rows[id], palette.cream)
+	daily_button.add_theme_color_override("icon_normal_color", palette.accent)
+	daily_button.add_theme_color_override("icon_hover_color", palette.accent)
+	daily_button.add_theme_color_override("icon_pressed_color", palette.accent)
+	_pad_button(daily_button, 30)
+	var badge := _style(palette.ink, 18)
+	badge.set_border_width_all(3)
+	badge.border_color = palette.cream
+	badge.content_margin_left = 9
+	badge.content_margin_right = 9
+	badge.content_margin_top = 1
+	badge.content_margin_bottom = 1
+	hint_badge.add_theme_stylebox_override("panel", badge)
+	hint_badge_label.add_theme_color_override("font_color", palette.cream)
+	hint_badge_icon.self_modulate = palette.cream
+	var toast_box := _style(palette.surface, 18)
+	toast_box.set_border_width_all(2)
+	toast_box.border_color = palette.grid
+	toast_box.shadow_color = Color(0, 0, 0, 0.22)
+	toast_box.shadow_size = 12
+	toast_box.content_margin_left = 26
+	toast_box.content_margin_right = 26
+	toast_box.content_margin_top = 16
+	toast_box.content_margin_bottom = 16
+	toast.add_theme_stylebox_override("panel", toast_box)
+	toast_label.add_theme_color_override("font_color", palette.ink)
 	settings_title.add_theme_color_override("font_color", palette.ink)
+	shop_title.add_theme_color_override("font_color", palette.ink)
+	shop_hints_label.add_theme_color_override("font_color", palette.muted)
+	shop_unavailable.add_theme_color_override("font_color", palette.muted)
+	shop_veil.color = palette.veil
 	home_title.self_modulate = Color("#faf1d9") if theme_name == "dark" else palette.ink
 	home_title_accent.self_modulate = palette.accent
 	home_level.add_theme_color_override("font_color", palette.muted)
@@ -563,6 +751,8 @@ func _apply_theme(next_theme: String) -> void:
 	modal.content_margin_bottom = 36
 	panel.add_theme_stylebox_override("panel", modal)
 	settings_panel.add_theme_stylebox_override("panel", modal)
+	shop_panel.add_theme_stylebox_override("panel", modal)
+	_refresh_wallet()
 	for arrow in board_layer.get_children():
 		arrow.queue_redraw()
 	board_layer.queue_redraw()
@@ -602,22 +792,66 @@ func _build_ui() -> void:
 	home_button.accessibility_name = home_button.tooltip_text
 	add_child(home_button)
 
+	hint_button = _button("", _on_hint_pressed)
+	hint_button.icon = ICONS.hint
+	hint_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint_button.custom_minimum_size = Vector2.ONE * HINT_TARGET
+	hint_button.tooltip_text = _localized("İpucu")
+	hint_button.accessibility_name = hint_button.tooltip_text
+	add_child(hint_button)
+	hint_badge = PanelContainer.new()
+	hint_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var badge_row := HBoxContainer.new()
+	badge_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	badge_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hint_badge_icon = TextureRect.new()
+	hint_badge_icon.texture = ICONS.ad
+	hint_badge_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	hint_badge_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	hint_badge_icon.custom_minimum_size = Vector2(22, 28)
+	hint_badge_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge_row.add_child(hint_badge_icon)
+	hint_badge_label = Label.new()
+	hint_badge_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint_badge_label.custom_minimum_size.x = 14
+	hint_badge_label.add_theme_font_override("font", DISPLAY_FONT)
+	hint_badge_label.add_theme_font_size_override("font_size", 20)
+	badge_row.add_child(hint_badge_label)
+	hint_badge.add_child(badge_row)
+	hint_button.add_child(hint_badge)
+
 	panel = PanelContainer.new()
 	panel.z_index = 10
 	panel.custom_minimum_size = Vector2(540, 360)
 	var box := VBoxContainer.new()
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_theme_constant_override("separation", 24)
+	box.add_theme_constant_override("separation", 20)
 	panel_label = Label.new()
 	panel_label.add_theme_font_override("font", DISPLAY_FONT)
 	panel_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	panel_label.add_theme_font_size_override("font_size", 34)
 	box.add_child(panel_label)
+	revive_ad_button = _icon_text_button(ICONS.ad, _localized("Reklam izle · Geri al"), _on_revive_ad)
+	revive_hint_button = _icon_text_button(ICONS.undo, _localized("1 ipucu ile geri al"), _on_revive_hint)
 	panel_retry = _button(_localized("Bölümü tekrar oyna"), func(): start(idx))
-	box.add_child(panel_retry)
+	for button in [revive_ad_button, revive_hint_button, panel_retry]:
+		button.custom_minimum_size.y = TOUCH_MIN
+		box.add_child(button)
 	panel.add_child(box)
 	add_child(panel)
 	_build_home()
+	_build_shop()
+	toast = PanelContainer.new()
+	toast.z_index = 20
+	toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	toast.hide()
+	toast_label = Label.new()
+	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	toast_label.add_theme_font_override("font", BODY_FONT)
+	toast_label.add_theme_font_size_override("font_size", 26)
+	toast.add_child(toast_label)
+	add_child(toast)
 
 
 func _build_home() -> void:
@@ -656,6 +890,22 @@ func _build_home() -> void:
 	settings_button.accessibility_name = settings_button.tooltip_text
 	home_screen.add_child(settings_button)
 
+	shop_button = _button("", func(): _show_shop(true, shop_button))
+	shop_button.icon = ICONS.shop
+	shop_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	shop_button.custom_minimum_size = Vector2(104, 104)
+	shop_button.expand_icon = true
+	shop_button.add_theme_constant_override("icon_max_width", 48)
+	shop_button.tooltip_text = _localized("Mağaza")
+	shop_button.accessibility_name = shop_button.tooltip_text
+	home_screen.add_child(shop_button)
+
+	daily_button = _button("", _claim_daily)
+	daily_button.icon = ICONS.gift
+	daily_button.custom_minimum_size = Vector2(0, TOUCH_MIN)
+	daily_button.add_theme_constant_override("h_separation", 14)
+	home_screen.add_child(daily_button)
+
 	settings_veil = ColorRect.new()
 	settings_veil.z_index = 2
 	settings_veil.hide()
@@ -678,13 +928,13 @@ func _build_home() -> void:
 	theme_button = _button("", _toggle_theme)
 	theme_button.custom_minimum_size.y = 104
 	box.add_child(theme_button)
+	restore_button = _button(_localized("Satın alımları geri yükle"), _restore_purchases)
+	privacy_button = _button(_localized("Gizlilik seçenekleri"), func(): Ads.show_privacy_options())
 	settings_close = _button(_localized("Kapat"), _show_settings.bind(false))
-	settings_close.custom_minimum_size.y = 104
-	box.add_child(settings_close)
-	theme_button.focus_neighbor_top = theme_button.get_path_to(settings_close)
-	theme_button.focus_neighbor_bottom = theme_button.get_path_to(settings_close)
-	settings_close.focus_neighbor_top = settings_close.get_path_to(theme_button)
-	settings_close.focus_neighbor_bottom = settings_close.get_path_to(theme_button)
+	for button in [restore_button, privacy_button, settings_close]:
+		button.custom_minimum_size.y = 104
+		box.add_child(button)
+	_chain_focus([theme_button, restore_button, privacy_button, settings_close])
 
 
 func _home_label(text: String, font: Font, font_size: int) -> Label:
@@ -701,8 +951,10 @@ func _show_home(open: bool) -> void:
 	home_screen.visible = open
 	retry.visible = not open
 	home_button.visible = not open
+	hint_button.visible = not open
 	if not open:
 		_show_settings(false)
+	_refresh_hint_button()
 	_layout_home(get_viewport_rect().size)
 	if open:
 		play_button.grab_focus()
@@ -713,12 +965,23 @@ func _show_home(open: bool) -> void:
 func _show_settings(open: bool) -> void:
 	settings_veil.visible = open
 	var menu_focus := Control.FOCUS_NONE if open else Control.FOCUS_ALL
-	play_button.focus_mode = menu_focus
-	settings_button.focus_mode = menu_focus
+	for button in [play_button, settings_button, shop_button, daily_button]:
+		button.focus_mode = menu_focus
 	if open:
+		privacy_button.visible = Ads.can_show_privacy_options()
+		_chain_focus([theme_button, restore_button, privacy_button, settings_close])
 		theme_button.grab_focus()
 	else:
 		settings_button.grab_focus()
+
+
+## Wraps up/down focus through the visible buttons of a modal.
+func _chain_focus(buttons: Array) -> void:
+	var shown := buttons.filter(func(b: Control) -> bool: return b.visible)
+	for k in shown.size():
+		var b: Control = shown[k]
+		b.focus_neighbor_top = b.get_path_to(shown[k - 1])
+		b.focus_neighbor_bottom = b.get_path_to(shown[(k + 1) % shown.size()])
 
 
 func _layout_home(vs: Vector2) -> void:
@@ -730,8 +993,12 @@ func _layout_home(vs: Vector2) -> void:
 	var width := minf(safe.size.x - 108, 780)
 	var edge := safe.position.x + (safe.size.x - width) * 0.5
 	var is_home := home_screen.visible
-	var art_scale := minf(width / 600.0, (safe.size.y - 640) / 440.0)
-	home_art.position = Vector2(safe.get_center().x, safe.position.y + (400 + safe.size.y - 300) * 0.5)
+	# The art sits between the title (ends at +390) and the daily gift row (starts 394 above the
+	# bottom). The row is reserved even when hidden so claiming it never shifts the art.
+	var art_top := 400.0
+	var art_bottom := safe.size.y - 408
+	var art_scale := minf(width / 600.0, (art_bottom - art_top) / 440.0)
+	home_art.position = Vector2(safe.get_center().x, safe.position.y + (art_top + art_bottom) * 0.5)
 	home_art.scale = Vector2.ONE * art_scale
 	mascot.z_index = 12 if is_home else 0
 	mascot.position = home_art.position if is_home else Vector2(vs.x * 0.5, pocket_y - 28)
@@ -740,22 +1007,471 @@ func _layout_home(vs: Vector2) -> void:
 	settings_veil.size = vs
 	home_title.position = Vector2(edge, safe.position.y + 150)
 	home_title.size = Vector2(minf(width, 550), 240)
-	home_level.text = _localized("Bölüm %02d") % (idx + 1)
+	var stars := Economy.total_stars()
+	home_level.text = _localized("Bölüm %02d · ★ %d") % [idx + 1, stars] if stars > 0 else _localized("Bölüm %02d") % (idx + 1)
 	home_level.position = Vector2(edge, safe.end.y - 282)
 	home_level.size.x = width
 	play_button.size = Vector2(width, 120)
 	play_button.position = Vector2(edge, safe.end.y - 204)
 	settings_button.position = Vector2(edge + width - 104, safe.position.y + 32)
+	shop_button.position = settings_button.position - Vector2(104 + 16, 0)
+	daily_button.visible = Economy.can_claim_daily()
+	var gift := _next_daily_amount()
+	daily_button.text = _localized("Günlük hediye: +1 ipucu") if gift == 1 else _localized("Günlük hediye: +%d ipucu") % gift
+	daily_button.reset_size()
+	daily_button.size.x = minf(daily_button.size.x, width)
+	daily_button.position = Vector2(safe.get_center().x - daily_button.size.x * 0.5, home_level.position.y - 12 - TOUCH_MIN)
 
 
-func _style_neutral_button(button: Button) -> void:
+## `fill` defaults to the surface colour; pass palette.cream for a visible well on a surface panel.
+func _style_neutral_button(button: Button, fill = null) -> void:
+	var base: Color = palette.surface if fill == null else fill
 	button.add_theme_color_override("font_focus_color", palette.ink)
 	button.add_theme_color_override("icon_focus_color", palette.ink)
 	for state in ["normal", "hover", "pressed"]:
-		button.add_theme_stylebox_override(state, _style(palette.surface if state == "normal" else palette.grid, 18))
+		button.add_theme_stylebox_override(state, _style(base if state == "normal" else palette.grid, 18))
 		var suffix: String = "normal" if state == "normal" else state
 		button.add_theme_color_override("icon_" + suffix + "_color", palette.ink)
 		button.add_theme_color_override("font_" + ("color" if state == "normal" else suffix + "_color"), palette.ink)
+	button.add_theme_stylebox_override("disabled", _style(base, 18))
+	button.add_theme_color_override("font_disabled_color", palette.muted)
+	button.add_theme_color_override("icon_disabled_color", palette.muted)
+
+
+## Horizontal content padding for buttons that size to their text.
+func _pad_button(button: Button, pad: float) -> void:
+	for state in ["normal", "hover", "pressed", "disabled", "focus"]:
+		var box := button.get_theme_stylebox(state) as StyleBoxFlat
+		if box:
+			box.content_margin_left = pad
+			box.content_margin_right = pad
+
+
+## Draws the button `inset` px inside its (larger) touch rect.
+func _inset_button(button: Button, inset: float) -> void:
+	for state in ["normal", "hover", "pressed", "disabled", "focus"]:
+		var box := button.get_theme_stylebox(state) as StyleBoxFlat
+		if box:
+			var grow := (box.expand_margin_left if state == "focus" else 0.0) - inset
+			box.expand_margin_left = grow
+			box.expand_margin_right = grow
+			box.expand_margin_top = grow
+			box.expand_margin_bottom = grow
+
+
+func _title_font_size(title: String) -> int:
+	var room := (hint_button.position.x + HINT_INSET - 20 - left) if hint_button else INF
+	var font_size := 50
+	while font_size > 28 and DISPLAY_FONT.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > room:
+		font_size -= 2
+	return font_size
+
+
+# --- Hints ---
+
+## Whether the hint button is usable (it stays undimmed under the shop sheet).
+func _hint_usable() -> bool:
+	return not s.is_empty() and not home_screen.visible and not input_locked and s.status == "playing"
+
+
+func _hint_allowed() -> bool:
+	return _hint_usable() and not shop_veil.visible
+
+
+func _on_hint_pressed() -> void:
+	if not _hint_allowed():
+		return
+	if Economy.get_hints() <= 0:
+		_show_shop(true, hint_button)
+		return
+	if hinted_id != -1 and nodes.has(hinted_id):
+		return  # the current hint is still on screen; never charge twice for it
+	var i := Logic.hint(s)
+	if i < 0:
+		_toast(_localized("Buradan çıkış yok — geri al veya yeniden başlat"))
+		return
+	if not Economy.spend_hint():
+		return
+	hinted_id = int(s.arrows[i].id)
+	nodes[hinted_id].queue_redraw()
+
+
+func _refresh_hint_button() -> void:
+	if not hint_button or s.is_empty():
+		return
+	var hints := Economy.get_hints()
+	hint_button.disabled = not _hint_usable()
+	var show_ad := hints <= 0 and Ads.is_rewarded_ready()
+	hint_badge_icon.visible = show_ad
+	hint_badge_label.visible = not show_ad
+	hint_badge_label.text = str(hints) if hints > 0 else "+"
+	hint_badge.reset_size()
+	hint_badge.position = Vector2(HINT_TARGET - HINT_INSET + 8 - hint_badge.size.x, -4)
+	hint_button.accessibility_name = _localized("İpucu, %d kaldı") % hints
+
+
+## Soft single pulse after repeated blocked taps; never a popup.
+func _nudge_hint() -> void:
+	if not hint_button.is_visible_in_tree() or hint_button.disabled:
+		return
+	if hint_nudge:
+		hint_nudge.kill()
+	hint_nudge = hint_button.create_tween().set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	hint_nudge.tween_property(hint_button, "scale", Vector2.ONE * 1.08, 0.22)
+	hint_nudge.tween_property(hint_button, "scale", Vector2.ONE, 0.28)
+
+
+# --- Loss and revive ---
+
+func _show_loss_panel() -> void:
+	panel_label.text = _localized("Cep doldu")
+	panel.visible = true
+	veil.visible = true
+	retry.disabled = true
+	_refresh_loss_panel()
+
+
+func _refresh_loss_panel() -> void:
+	if not panel or s.is_empty():
+		return
+	var can_undo: bool = s.status == "lost" and not history.is_empty()
+	revive_ad_button.visible = can_undo and Ads.is_rewarded_ready()
+	revive_hint_button.visible = can_undo and Economy.get_hints() > 0
+	# Replay is the main action only when there is nothing gentler to offer.
+	if revive_ad_button.visible or revive_hint_button.visible:
+		_style_neutral_button(panel_retry, palette.cream)
+	else:
+		_style_button(panel_retry)
+	panel.reset_size()
+	panel.position = (get_viewport_rect().size - panel.size) * 0.5
+
+
+func _on_revive_ad() -> void:
+	if s.status == "lost" and not history.is_empty():
+		Ads.show_rewarded(Ads.PLACEMENT_REVIVE, _revive)
+
+
+func _on_revive_hint() -> void:
+	if s.status == "lost" and not history.is_empty() and Economy.spend_hint():
+		_revive()
+
+
+## Steps back to the state before the losing move without restarting the level.
+func _revive() -> void:
+	if s.is_empty() or s.status != "lost" or history.is_empty():
+		return
+	Logic.restore(s, history.pop_back())
+	blocked_streak = 0
+	_rebuild_board()
+	panel.visible = false
+	veil.visible = false
+	retry.disabled = input_locked
+	if mascot_tween:
+		mascot_tween.kill()
+		mascot_tween = null
+	mascot.rotation = 0.0
+	_update_mascot_mood()
+	_refresh_hint_button()
+	queue_redraw()
+
+
+# --- Wallet (hints, ads, store) ---
+
+func _on_hints_changed(_count: int) -> void:
+	_refresh_wallet()
+
+
+func _on_rewarded_ready_changed(_is_ready: bool) -> void:
+	_refresh_wallet()
+
+
+func _on_store_availability(_available: bool) -> void:
+	_refresh_wallet()
+
+
+func _refresh_wallet() -> void:
+	_refresh_hint_button()
+	_refresh_shop()
+	if panel.visible:
+		_refresh_loss_panel()
+	if home_screen.visible:
+		_layout_home(get_viewport_rect().size)
+
+
+func _on_purchase_completed(_product_id: String) -> void:
+	_toast(_localized("Teşekkürler!"))
+	_refresh_wallet()
+
+
+func _on_purchase_failed(_product_id: String, message: String) -> void:
+	_refresh_wallet()
+	if message.to_lower() in ["canceled", "cancelled", "user_canceled", "user_cancelled"]:
+		return
+	_toast(_localized("Satın alma tamamlanmadı"))
+
+
+func _restore_purchases() -> void:
+	if IAP.is_available():
+		IAP.restore_purchases()
+		_toast(_localized("Satın alımlar kontrol ediliyor"))
+	else:
+		_toast(_localized("Mağaza şu an kullanılamıyor"))
+
+
+# --- Daily gift ---
+
+## Mirrors Economy.claim_daily's streak rule so the pill can promise the right amount.
+func _next_daily_amount() -> int:
+	var today := str(Economy.today_provider.call())
+	var next_streak: int = Economy.streak + 1 if Economy._is_day_before(Economy.last_daily, today) else 1
+	return Economy.DAILY_CYCLE_HINTS if next_streak % Economy.DAILY_CYCLE == 0 else Economy.DAILY_HINTS
+
+
+func _claim_daily() -> void:
+	var amount := Economy.claim_daily()
+	if amount > 0:
+		var key := "+1 ipucu · Seri %d gün" if amount == 1 else "+%d ipucu · Seri %d gün"
+		_toast(_localized(key) % ([Economy.streak] if amount == 1 else [amount, Economy.streak]))
+	if daily_button.has_focus():
+		play_button.grab_focus()
+	_layout_home(get_viewport_rect().size)
+
+
+# --- Toast ---
+
+func _toast(text: String) -> void:
+	toast_label.text = text
+	var max_width := minf(get_viewport_rect().size.x - 96, 600) - 52
+	var text_width := BODY_FONT.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 26).x + 4
+	# Wrap only when needed; a wrapping Label measures its height at its current width.
+	toast_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if text_width > max_width else TextServer.AUTOWRAP_OFF
+	toast_label.custom_minimum_size.x = minf(text_width, max_width)
+	toast_label.size = Vector2(toast_label.custom_minimum_size.x, 0)
+	toast.reset_size()
+	_place_toast()
+	if toast_tween:
+		toast_tween.kill()
+	toast.modulate.a = 0.0
+	toast.show()
+	toast_tween = create_tween()
+	toast_tween.tween_property(toast, "modulate:a", 1.0, 0.15)
+	toast_tween.tween_interval(TOAST_SECONDS)
+	toast_tween.tween_property(toast, "modulate:a", 0.0, 0.3)
+	toast_tween.tween_callback(toast.hide)
+
+
+## Bottom centre, just above the pocket heading (and over the daily gift row on Home).
+func _place_toast() -> void:
+	var vs := get_viewport_rect().size
+	toast.position = Vector2((vs.x - toast.size.x) * 0.5, vs.y - 300 - toast.size.y)
+
+
+# --- Shop ---
+
+func _build_shop() -> void:
+	shop_veil = ColorRect.new()
+	shop_veil.z_index = 14
+	shop_veil.hide()
+	shop_veil.gui_input.connect(func(e: InputEvent):
+		if e is InputEventMouseButton and e.pressed and e.button_index == MOUSE_BUTTON_LEFT:
+			_show_shop(false))
+	add_child(shop_veil)
+	var center := CenterContainer.new()
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	shop_veil.add_child(center)
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	shop_panel = PanelContainer.new()
+	center.add_child(shop_panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 18)
+	shop_panel.add_child(box)
+	shop_title = Label.new()
+	shop_title.text = _localized("Mağaza")
+	shop_title.add_theme_font_override("font", DISPLAY_FONT)
+	shop_title.add_theme_font_size_override("font_size", 38)
+	box.add_child(shop_title)
+	shop_hints_label = Label.new()
+	shop_hints_label.add_theme_font_override("font", BODY_FONT)
+	shop_hints_label.add_theme_font_size_override("font_size", 26)
+	box.add_child(shop_hints_label)
+	shop_scroll = ScrollContainer.new()
+	shop_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	box.add_child(shop_scroll)
+	# The margin keeps the 5px focus ring inside the scroll clip.
+	var shop_margin := MarginContainer.new()
+	shop_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for side in ["left", "right", "top", "bottom"]:
+		shop_margin.add_theme_constant_override("margin_" + side, 6)
+	shop_scroll.add_child(shop_margin)
+	shop_list = VBoxContainer.new()
+	shop_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	shop_list.add_theme_constant_override("separation", 14)
+	shop_margin.add_child(shop_list)
+	shop_ad_button = _shop_row(ICONS.ad, func():
+		Ads.show_rewarded(Ads.PLACEMENT_HINT, func():
+			Economy.add_hints(1)
+			_toast(_localized("+1 ipucu"))))
+	shop_ad_button.get_meta("name").text = _localized("Reklam izle · +1 ipucu")
+	shop_list.add_child(shop_ad_button)
+	for id in SHOP_PRODUCTS:
+		var row := _shop_row(null, IAP.purchase.bind(id))
+		shop_rows[id] = row
+		shop_list.add_child(row)
+	shop_unavailable = Label.new()
+	shop_unavailable.text = _localized("Mağaza şu an kullanılamıyor")
+	shop_unavailable.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	shop_unavailable.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	shop_unavailable.custom_minimum_size.y = 72
+	shop_unavailable.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	shop_unavailable.add_theme_font_override("font", BODY_FONT)
+	shop_unavailable.add_theme_font_size_override("font_size", 26)
+	shop_list.add_child(shop_unavailable)
+	shop_close = _button(_localized("Kapat"), _show_shop.bind(false))
+	shop_close.custom_minimum_size.y = 104
+	box.add_child(shop_close)
+
+
+## Button whose icon and label are centred together (Button alone pins the icon to the edge).
+func _icon_text_button(icon: Texture2D, text: String, cb: Callable) -> Button:
+	var b := _button("", cb)
+	b.accessibility_name = text
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 14)
+	b.add_child(row)
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var glyph := TextureRect.new()
+	glyph.texture = icon
+	glyph.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	glyph.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	glyph.custom_minimum_size = Vector2(34, 34)
+	glyph.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(glyph)
+	var label := Label.new()
+	label.text = text
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.add_theme_font_override("font", BODY_FONT)
+	label.add_theme_font_size_override("font_size", 26)
+	row.add_child(label)
+	b.set_meta("icon", glyph)
+	b.set_meta("label", label)
+	b.custom_minimum_size.x = maxf(b.custom_minimum_size.x, row.get_combined_minimum_size().x + 48)
+	return b
+
+
+func _tint_content(button: Button, color: Color) -> void:
+	button.get_meta("icon").self_modulate = color
+	button.get_meta("label").add_theme_color_override("font_color", color)
+
+
+## Full-width store row: optional icon, name (wraps to two lines) and a price on the right.
+func _shop_row(icon: Texture2D, cb: Callable) -> Button:
+	var b := _button("", cb)
+	b.custom_minimum_size = Vector2(0, 104)
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 16)
+	b.add_child(row)
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	row.offset_left = 24
+	row.offset_right = -24
+	var glyph := TextureRect.new()
+	glyph.texture = icon
+	glyph.visible = icon != null
+	glyph.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	glyph.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	glyph.custom_minimum_size = Vector2(36, 36)
+	glyph.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(glyph)
+	var name_label := Label.new()
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	name_label.max_lines_visible = 2
+	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	name_label.add_theme_font_override("font", BODY_FONT)
+	name_label.add_theme_font_size_override("font_size", 26)
+	row.add_child(name_label)
+	var price := Label.new()
+	price.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	price.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	price.add_theme_font_override("font", DISPLAY_FONT)
+	price.add_theme_font_size_override("font_size", 26)
+	row.add_child(price)
+	b.set_meta("icon", glyph)
+	b.set_meta("name", name_label)
+	b.set_meta("price", price)
+	return b
+
+
+func _refresh_shop() -> void:
+	if not shop_veil:
+		return
+	shop_hints_label.text = _localized("İpuçların: %d") % Economy.get_hints()
+	shop_ad_button.visible = Ads.is_rewarded_ready()
+	shop_ad_button.get_meta("icon").self_modulate = palette.cream
+	shop_ad_button.get_meta("name").add_theme_color_override("font_color", palette.cream)
+	shop_ad_button.accessibility_name = shop_ad_button.get_meta("name").text
+	var available := IAP.is_available()
+	shop_unavailable.visible = not available
+	for id in shop_rows:
+		var row: Button = shop_rows[id]
+		var owned: bool = IAP.PRODUCTS[id].type == "non_consumable" and IAP.owns(id)
+		var name_label: Label = row.get_meta("name")
+		var price: Label = row.get_meta("price")
+		row.visible = available
+		row.disabled = owned
+		name_label.text = _localized(SHOP_PRODUCTS[id])
+		price.text = _localized("Satın alındı ✓") if owned else IAP.get_price(id)
+		name_label.add_theme_color_override("font_color", palette.muted if owned else palette.ink)
+		price.add_theme_color_override("font_color", palette.muted if owned else palette.accent)
+		row.accessibility_name = "%s, %s" % [name_label.text, price.text]
+	var focusable: Array = [shop_ad_button]
+	for id in shop_rows:
+		focusable.append(shop_rows[id])
+	focusable.append(shop_close)
+	_chain_focus(focusable.filter(func(b: Button) -> bool: return not b.disabled))
+	if shop_veil.visible:
+		_layout_shop(get_viewport_rect().size)
+		var owner := get_viewport().gui_get_focus_owner()
+		if owner == null or not owner.is_visible_in_tree() or (owner is Button and owner.disabled):
+			shop_close.grab_focus()
+
+
+func _layout_shop(vs: Vector2) -> void:
+	if not shop_veil:
+		return
+	shop_veil.size = vs
+	shop_panel.custom_minimum_size.x = minf(vs.x - 72, 600)
+	# Title, hint line, close and margins take ~330px; the rows scroll if the rest is too short.
+	var rows_height := shop_list.get_combined_minimum_size().y + 12
+	shop_scroll.custom_minimum_size.y = minf(rows_height, maxf(vs.y - 96 - 330, 208))
+
+
+func _show_shop(open: bool, from: Control = null) -> void:
+	if open == shop_veil.visible:
+		return
+	var background := [play_button, settings_button, shop_button, daily_button, hint_button, home_button, retry]
+	for control in background:
+		control.focus_mode = Control.FOCUS_NONE if open else Control.FOCUS_ALL
+	if open:
+		shop_return_focus = from
+		shop_veil.show()
+		_refresh_shop()
+		_layout_shop(get_viewport_rect().size)
+		shop_scroll.scroll_vertical = 0
+		var first: Button = shop_ad_button if shop_ad_button.visible else shop_close
+		for id in shop_rows:
+			if first == shop_close and shop_rows[id].visible and not shop_rows[id].disabled:
+				first = shop_rows[id]
+		first.grab_focus()
+	else:
+		shop_veil.hide()
+		if shop_return_focus and shop_return_focus.is_visible_in_tree():
+			shop_return_focus.grab_focus()
+	_refresh_hint_button()
 
 
 func _draw_home_art() -> void:
