@@ -1,7 +1,10 @@
-"""Reverse-placement level generator. Usage: python3 tools/generate.py [--seed N]"""
+"""Reverse-placement level generator. See --help for options."""
 import argparse
+import csv
+from functools import lru_cache
 import hashlib
 import json
+import multiprocessing
 import os
 import random
 import sys
@@ -15,29 +18,37 @@ TRIALS = 200
 TIME_LIMIT = 20.0  # seconds per level; hit only as a safety net (breaks determinism if it fires)
 
 
-def place_arrows(rng, w, h, n, lens=(2, 2, 3, 3, 4)):
-    """Each new arrow's head path to the edge must be clear of already placed arrows,
-    so reversed placement order is a valid exit order. Returns arrows or None."""
-    geo = []  # every in-board placement; occupancy only grows, so invalid ones are dropped for good
+@lru_cache(maxsize=None)
+def placements(w, h, lens):
+    def mask(cells):
+        return sum(1 << (y * w + x) for x, y in cells)
+
+    geo = []
+    lengths = sorted(set(lens))
     for x in range(w):
         for y in range(h):
             for dr in DIRS:
-                for ln in sorted(set(lens)):
+                for ln in lengths:
                     a = {"x": x, "y": y, "dir": dr, "len": ln}
                     cs = arrow_cells(a)
                     if all(0 <= cx < w and 0 <= cy < h for cx, cy in cs):
-                        geo.append((a, frozenset(cs), frozenset(arrow_path(a, w, h))))
-    occ, arrows, paths = set(), [], []
+                        geo.append((a, mask(cs), mask(arrow_path(a, w, h)), lens.count(ln) * 0.5, 0))
+    return geo
+
+
+def place_arrows(rng, w, h, n, lens=(2, 2, 3, 3, 4)):
+    """Each new arrow's head path must be clear, so reverse placement is a solution."""
+    geo = placements(w, h, tuple(lens))
+    arrows = []
     for _ in range(n):
-        geo = [g for g in geo if occ.isdisjoint(g[1]) and occ.isdisjoint(g[2])]
         if not geo:
             return None
         # prefer arrows that block already placed ones (interlocking), and common lengths
-        a, cs, ps = max(geo, key=lambda g: min(sum(1 for p in paths if not p.isdisjoint(g[1])), 2)
-                        + lens.count(g[0]["len"]) * 0.5 + rng.random() * 2)
-        occ |= cs
+        a, cs, ps, _, _ = max(geo, key=lambda g: g[4] + g[3] + rng.random() * 2)
         arrows.append(dict(a))
-        paths.append(ps)
+        if len(arrows) < n:
+            geo = [(g, cells, path, weight, min(blocks + bool(cells & ps), 2))
+                   for g, cells, path, weight, blocks in geo if not cs & (cells | path)]
     return arrows
 
 
@@ -68,12 +79,16 @@ def make_queue(rng, colors_in_order, pocket, swaps):
     return q
 
 
-def candidate(rng, w, h, n, ncol, pocket):
+def candidate(rng, w, h, n, ncol, pocket, minority=None):
     arrows = None
     while arrows is None:
         arrows = place_arrows(rng, w, h, n)
     palette = rng.sample(COLORS, ncol)
-    cols = palette + [rng.choice(palette) for _ in range(n - ncol)]
+    if minority is None:
+        cols = palette + [rng.choice(palette) for _ in range(n - ncol)]
+    else:
+        cols = [palette[0]] * (n - minority) + palette[1:]
+        cols += [rng.choice(palette[1:]) for _ in range(minority - ncol + 1)]
     rng.shuffle(cols)
     for a, c in zip(arrows, cols):
         a["color"] = c
@@ -83,15 +98,16 @@ def candidate(rng, w, h, n, ncol, pocket):
     return {"id": 0, "w": w, "h": h, "pocket": pocket, "arrows": arrows, "queue": queue}
 
 
-def build(seed, w, h, n, ncol, pocket, target, max_win=1.0, require_loss=False, tries=60):
+def build(seed, w, h, n, ncol, pocket, target, max_win=1.0, require_loss=False,
+          tries=60, *, time_limit=TIME_LIMIT, tolerance=0.0, minority=None):
     """Generate `tries` candidates, return the solvable one with random win rate closest to target."""
     rng = random.Random(seed)
-    best, t0 = None, time.time()
+    best, t0 = None, time.monotonic()
     for k in range(tries):
-        if time.time() - t0 > TIME_LIMIT:
+        if time_limit is not None and time.monotonic() - t0 > time_limit:
             print(f"  warn: time limit hit at candidate {k}", file=sys.stderr)
             break
-        d = candidate(rng, w, h, n, ncol, pocket)
+        d = candidate(rng, w, h, n, ncol, pocket, minority)
         lv = Level(d)
         win = lv.random_play(TRIALS, random.Random(seed * 7919 + k))
         if win > max_win or (require_loss and win >= 1.0):
@@ -105,6 +121,8 @@ def build(seed, w, h, n, ncol, pocket, target, max_win=1.0, require_loss=False, 
         err = abs(win - target)
         if best is None or err < best[0]:
             best = (err, d, win)
+        if err <= tolerance:
+            break
     return best and (best[1], best[2])
 
 
@@ -121,12 +139,20 @@ def proto_specs():
     ]
 
 
-def levels_specs(count=50):
+def levels_specs(count=1000):
     out = []
     for i in range(count):
-        t = i / (count - 1)
-        out.append((round(lerp(5, 8, t)), round(lerp(6, 11, t)), round(lerp(9, 30, t)),
-                    round(lerp(2, 5, t)), 4 if t < 0.5 else 3, 0.01 + 0.91 * (1 - t) ** 1.6))
+        block_start = i - i % 10
+        phase = i % 10
+        if i < 50:
+            size = lerp(0, 0.8, i / 49)
+            base = lerp(0.92, 0.16, block_start / 50)
+        else:
+            size = lerp(0.8, 1, min((i - 49) / 250, 1))
+            base = lerp(0.16, 0.055, min((block_start - 50) / 940, 1))
+        target = base * (0.2 if phase == 9 else lerp(1, 0.65, phase / 8))
+        out.append((round(lerp(5, 8, size)), round(lerp(6, 11, size)), round(lerp(9, 30, size)),
+                    round(lerp(2, 5, size)), 4 if i < 30 else 3, target))
     return out
 
 
@@ -149,6 +175,56 @@ def build_set(specs, base_seed, require_loss, monotone):
     return levels
 
 
+def build_level(index, spec, retry=0):
+    _, _, n, colors, _, target = spec
+    # A dominant color gives dense boards room to match the easier targets.
+    minority = max(colors - 1, round(n * (0.42 - min(target, 0.2)))) if index > 40 else None
+    best = None
+    for batch in range(3):
+        seed = (retry << 40) | (batch << 32) | index
+        result = build(seed, *spec, require_loss=True, tries=24, time_limit=None,
+                       tolerance=0.005, minority=minority)
+        if result is None:
+            continue
+        error = abs(result[1] - target)
+        if minority is None or error <= 0.025:
+            return result
+        if best is None or error < abs(best[1] - target):
+            best = result
+    return best
+
+
+def level_hash(level):
+    arrows = sorted(level["arrows"], key=lambda a: (a["x"], a["y"]))
+    payload = json.dumps((arrows, level["queue"]), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).digest()
+
+
+def unique_level(index, spec, result, seen):
+    for retry in range(6):
+        if retry:
+            result = build_level(index, spec, retry)
+        if result is not None:
+            d, win = result
+            digest = level_hash(d)
+            if digest not in seen:
+                seen.add(digest)
+                d["id"] = index
+                return d, win
+    raise SystemExit(f"level {index}: no unique valid candidate")
+
+
+def build_levels(specs):
+    seen, levels = set(), []
+    with multiprocessing.Pool(os.cpu_count()) as pool:
+        results = [pool.apply_async(build_level, (index, spec)) for index, spec in enumerate(specs, 1)]
+        for index, (spec, result) in enumerate(zip(specs, results), 1):
+            levels.append(unique_level(index, spec, result.get(), seen))
+            if index % 50 == 0 or index == len(specs):
+                print(f"levels: {index}/{len(specs)}", file=sys.stderr, flush=True)
+    return levels
+
+
 def daily(date_str):
     """One deterministic level for a date string like '2026-11-22'."""
     seed = int(hashlib.sha256(date_str.encode()).hexdigest()[:12], 16)
@@ -158,33 +234,41 @@ def daily(date_str):
     return d
 
 
-def summary(d, win):
-    n = len(d["arrows"])
-    diff = (1 - win) * 100 + n
-    return (f"id={d['id']:>2}  {d['w']}x{d['h']:<2}  ok={n:>2}  renk={len(set(d['queue']))}  "
-            f"pocket={d['pocket']}  rastgele_kazanma={win * 100:5.1f}%  zorluk={diff:5.1f}")
-
-
 def write(path, levels):
     for d, _ in levels:
-        assert not validate(d), validate(d)
+        errors = validate(d)
+        if errors:
+            raise ValueError(f"level {d['id']}: {errors}")
     with open(path, "w") as f:
         json.dump([d for d, _ in levels], f, separators=(",", ":"))
         f.write("\n")
 
 
+def write_report(path, levels):
+    with open(path, "w", newline="") as f:
+        report = csv.writer(f)
+        report.writerow(("id", "w", "h", "arrows", "colors", "pocket", "random_win", "difficulty"))
+        for d, win in levels:
+            n = len(d["arrows"])
+            report.writerow((d["id"], d["w"], d["h"], n, len(set(d["queue"])),
+                             d["pocket"], f"{win:.3f}", f"{(1 - win) * 100 + n:.1f}"))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--seed", type=int, default=1, help="seed for the proto set")
+    ap.add_argument("--only", choices=("levels", "proto"))
     args = ap.parse_args()
-    for name, specs, req, mono in (("proto", proto_specs(), False, True),
-                                   ("levels", levels_specs(), True, True)):
-        t0 = time.time()
-        lv = build_set(specs, args.seed * (1 if name == "proto" else 31), req, mono)
+    for name in ("proto", "levels"):
+        if args.only is not None and args.only != name:
+            continue
+        t0 = time.monotonic()
+        print(f"{name}: generating", file=sys.stderr, flush=True)
+        lv = build_levels(levels_specs()) if name == "levels" else build_set(proto_specs(), args.seed, False, True)
         write(os.path.join(ROOT, "levels", name + ".json"), lv)
-        print(f"== levels/{name}.json ({len(lv)} bölüm, {time.time() - t0:.1f}s)")
-        for d, win in lv:
-            print(summary(d, win))
+        if name == "levels":
+            write_report(os.path.join(ROOT, "levels", "levels_report.csv"), lv)
+        print(f"levels/{name}.json: {len(lv)} levels in {time.monotonic() - t0:.1f}s", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,10 @@
 .godot/
 __pycache__/
 .claude/
+build/
+android/
+*.jks
+*.keystore
+
+# worktree tooling (nested git worktrees, not project content)
+.c0detnr/

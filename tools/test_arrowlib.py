@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from arrowlib import Level, arrow_cells, validate  # noqa: E402
@@ -86,9 +87,41 @@ class Generated(unittest.TestCase):
         self.check_file("proto.json", 10)
 
     def test_levels(self):
-        levels = self.check_file("levels.json", 50)
+        levels = self.check_file("levels.json", 1000)
+        self.assertEqual(len({generate.level_hash(d) for d in levels}), len(levels))
         for d in levels:
             self.assertLess(Level(d).random_play(), 1.0, f"level {d['id']} never loses")
+
+    def test_levels_specs(self):
+        specs = generate.levels_specs()
+        self.assertEqual(len(specs), 1000)
+        self.assertEqual(generate.levels_specs(1), specs[:1])
+        self.assertEqual(specs[0][:5], (5, 6, 9, 2, 4))
+        self.assertLess(specs[49][2], 30)
+        self.assertEqual(specs[299][:5], (8, 11, 30, 5, 3))
+        self.assertTrue(all(spec[:5] == specs[299][:5] for spec in specs[299:]))
+        targets = [spec[-1] for spec in specs]
+        for start in range(0, len(targets), 10):
+            block = targets[start:start + 10]
+            self.assertTrue(all(a > b for a, b in zip(block, block[1:])))
+            if start:
+                self.assertLess(targets[start - 1], block[0])
+                self.assertGreater(targets[start - 10], block[0])
+
+    def test_duplicate_level_retries_with_a_new_seed(self):
+        arrows = [A(0, 0, "up", 1, "red"), A(1, 0, "up", 1, "blue")]
+        first = lvl(arrows, ["red", "blue"])
+        duplicate = lvl(arrows[::-1], first["queue"])
+        duplicate["id"] = 99
+        new = lvl(arrows, ["blue", "red"])
+        spec = generate.levels_specs(1)[0]
+        seen = {generate.level_hash(first)}
+        with patch.object(generate, "build", return_value=(new, 0.5)) as build:
+            picked, win = generate.unique_level(2, spec, (duplicate, 0.4), seen)
+        build.assert_called_once()
+        self.assertEqual(build.call_args.args[0], (1 << 40) | 2)
+        self.assertEqual((picked["id"], win), (2, 0.5))
+        self.assertEqual(seen, {generate.level_hash(first), generate.level_hash(new)})
 
     def test_daily_deterministic(self):
         a, b = generate.daily("2026-11-22"), generate.daily("2026-11-22")
