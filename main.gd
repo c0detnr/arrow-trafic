@@ -71,6 +71,16 @@ const ENGLISH_TEXT := {
 	"Satın alımları geri yükle": "Restore purchases",
 	"Satın alımlar kontrol ediliyor": "Checking your purchases",
 	"Gizlilik seçenekleri": "Privacy options",
+	"Bölümler": "Levels",
+	"Önceki sayfa": "Previous page",
+	"Sonraki sayfa": "Next page",
+	"Bölüm %d, kilitli": "Level %d, locked",
+	"Bölüm %d, %d yıldız": "Level %d, %d stars",
+	"Toplam yıldız: %d": "Total stars: %d",
+	"Titreşim: Açık": "Vibration: On",
+	"Titreşim: Kapalı": "Vibration: Off",
+	"Ses: Açık": "Sound: On",
+	"Ses: Kapalı": "Sound: Off",
 }
 const HUD_ICONS := {
 	"remaining": preload("res://assets/remaining.svg"),
@@ -85,6 +95,10 @@ const ICONS := {
 	"gift": preload("res://assets/gift.svg"),
 	"undo": preload("res://assets/undo.svg"),
 	"star": preload("res://assets/star.svg"),
+	"levels": preload("res://assets/levels.svg"),
+	"close": preload("res://assets/close.svg"),
+	"prev": preload("res://assets/chevron-left.svg"),
+	"next": preload("res://assets/chevron-right.svg"),
 }
 ## Store rows in display order with their Turkish names (English via ENGLISH_TEXT).
 const SHOP_PRODUCTS := {
@@ -101,6 +115,14 @@ const HINT_TARGET := 100.0
 const HINT_INSET := 6.0
 const TOUCH_MIN := 100.0
 const TOAST_SECONDS := 1.8
+## Level select grid: 5 columns x 6 rows per page.
+const LEVELS_PER_PAGE := 30
+const LEVEL_COLUMNS := 5
+const LEVEL_GAP := 12.0
+## Haptic pulse lengths (ms); Input.vibrate_handheld is a no-op on desktop.
+const VIBRATE_BLOCKED := 25
+const VIBRATE_EXIT := 15
+const VIBRATE_WIN := 60
 
 var levels: Array = []
 var idx := 0
@@ -175,6 +197,26 @@ var privacy_button: Button
 var toast: PanelContainer
 var toast_label: Label
 var toast_tween: Tween
+# Settings toggles (persisted in save.json; missing keys mean on)
+var vibration_on := true
+var sound_on := true
+var haptic_count := 0  # pulses requested while vibration is on
+var vibration_button: Button
+var sound_button: Button
+# Level select
+var levels_button: Button
+var levels_veil: ColorRect
+var levels_panel: PanelContainer
+var levels_title: Label
+var levels_stars_icon: TextureRect
+var levels_stars_label: Label
+var levels_close: Button
+var levels_grid: GridContainer
+var level_tiles: Array = []  # Button per grid slot; the level shown depends on levels_page
+var levels_prev: Button
+var levels_next: Button
+var levels_page_label: Label
+var levels_page := 0
 
 
 func _ready() -> void:
@@ -191,6 +233,8 @@ func _ready() -> void:
 	IAP.purchase_completed.connect(_on_purchase_completed)
 	IAP.purchase_failed.connect(_on_purchase_failed)
 	var save := _load_save()
+	vibration_on = save.get("vibration", true) != false
+	sound_on = save.get("sound", true) != false
 	var saved_theme = save.get("theme", "dark")
 	_apply_theme(saved_theme if THEMES.has(saved_theme) else "dark")
 	start(clampi(int(save.get("level", 0)), 0, levels.size() - 1))
@@ -219,12 +263,44 @@ func _load_save() -> Dictionary:
 func _save() -> void:
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
-		f.store_string(JSON.stringify({"level": idx, "theme": theme_name}))
+		f.store_string(JSON.stringify({"level": idx, "theme": theme_name, "vibration": vibration_on, "sound": sound_on}))
 
 
 func _toggle_theme() -> void:
 	_apply_theme("light" if theme_name == "dark" else "dark")
 	_save()
+
+
+func _toggle_vibration() -> void:
+	vibration_on = not vibration_on
+	_save()
+	_refresh_settings_text()
+	_vibrate(VIBRATE_EXIT)  # a short confirmation pulse when turning it on
+
+
+func _toggle_sound() -> void:
+	sound_on = not sound_on
+	if not sound_on and win_sound.playing:
+		win_sound.stop()
+	_save()
+	_refresh_settings_text()
+
+
+func _refresh_settings_text() -> void:
+	theme_button.text = _localized("Açık tema" if theme_name == "dark" else "Koyu tema")
+	vibration_button.text = _localized("Titreşim: Açık" if vibration_on else "Titreşim: Kapalı")
+	sound_button.text = _localized("Ses: Açık" if sound_on else "Ses: Kapalı")
+
+
+func _vibrate(ms: int) -> void:
+	if vibration_on:
+		haptic_count += 1
+		Input.vibrate_handheld(ms)
+
+
+func _play_win_chime() -> void:
+	if sound_on:
+		win_sound.play()
 
 
 func start(i: int, entering := false) -> void:
@@ -360,6 +436,8 @@ func _notification(what: int) -> void:
 		return
 	if shop_veil.visible:
 		_show_shop(false)
+	elif levels_veil.visible:
+		_show_levels(false)
 	elif settings_veil.visible:
 		_show_settings(false)
 	elif not home_screen.visible:
@@ -369,9 +447,11 @@ func _notification(what: int) -> void:
 
 
 func _unhandled_input(e: InputEvent) -> void:
-	if e.is_action_pressed("ui_cancel") and (shop_veil.visible or settings_veil.visible):
+	if e.is_action_pressed("ui_cancel") and (shop_veil.visible or levels_veil.visible or settings_veil.visible):
 		if shop_veil.visible:
 			_show_shop(false)
+		elif levels_veil.visible:
+			_show_levels(false)
 		else:
 			_show_settings(false)
 		get_viewport().set_input_as_handled()
@@ -397,6 +477,7 @@ func _tap(pos: Vector2) -> void:
 		if history.size() > HISTORY_LIMIT:
 			history.pop_front()
 	var r := Logic.tap(s, i)
+	_vibrate(VIBRATE_WIN if r == "won" else VIBRATE_EXIT if r in ["gate", "pocket"] else VIBRATE_BLOCKED)
 	if r == "blocked":
 		blocked_streak += 1
 		if blocked_streak >= STUCK_TAPS:
@@ -453,7 +534,8 @@ func _celebrate_win(t: Tween) -> void:
 	input_locked = true
 	retry.disabled = true
 	win_tween = t
-	t.tween_callback(win_sound.play)
+	var stars := win_stars  # start() below resets win_stars before the final callback
+	t.tween_callback(_play_win_chime)
 	t.tween_method(_show_celebration, 0.0, 1.0, 0.9)
 	t.tween_property(board_layer, "modulate:a", 0.0, 0.3)
 	t.parallel().tween_method(_move_board, 0.0, -18.0, 0.3).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
@@ -466,7 +548,15 @@ func _celebrate_win(t: Tween) -> void:
 		win_tween = null
 		_refresh_hint_button()
 		# Wins only: Ads applies its own pacing and usually shows nothing.
-		Ads.on_level_cleared(Economy.levels_cleared))
+		if not Ads.on_level_cleared(Economy.levels_cleared):
+			_maybe_request_review(stars))
+
+
+## Asks the optional Review service (never alongside an interstitial); it applies its own pacing.
+func _maybe_request_review(last_stars: int) -> void:
+	var review := get_node_or_null("/root/Review")
+	if review and review.has_method("maybe_request"):
+		review.call("maybe_request", Economy.levels_cleared, last_stars)
 
 
 func _show_celebration(progress: float) -> void:
@@ -691,7 +781,8 @@ func _apply_theme(next_theme: String) -> void:
 	mascot_body.anti_aliasing_size = 0.15
 	mascot.queue_redraw()
 	for button in [retry, home_button, panel_retry, play_button, settings_button, theme_button, settings_close,
-			hint_button, revive_ad_button, shop_ad_button]:
+			hint_button, revive_ad_button, shop_ad_button, levels_button, vibration_button, sound_button, restore_button,
+			privacy_button, levels_close, levels_prev, levels_next]:
 		_style_button(button)
 	retry.add_theme_color_override("icon_normal_color", palette.ink)
 	retry.add_theme_color_override("icon_hover_color", palette.cream)
@@ -701,8 +792,11 @@ func _apply_theme(next_theme: String) -> void:
 	panel_label.add_theme_color_override("font_color", palette.ink)
 	home_screen.color = palette.cream
 	home_art.queue_redraw()
-	for button in [settings_button, settings_close, shop_button, restore_button, privacy_button, shop_close, daily_button]:
+	for button in [settings_button, settings_close, shop_button, shop_close, daily_button, levels_button]:
 		_style_neutral_button(button)
+	# Wells on the surface panels so each row reads as a button.
+	for button in [vibration_button, sound_button, restore_button, privacy_button, levels_close, levels_prev, levels_next]:
+		_style_neutral_button(button, palette.cream)
 	_style_neutral_button(revive_hint_button, palette.cream)
 	_tint_content(revive_ad_button, palette.cream)
 	_tint_content(revive_hint_button, palette.ink)
@@ -741,9 +835,14 @@ func _apply_theme(next_theme: String) -> void:
 	home_title.self_modulate = Color("#faf1d9") if theme_name == "dark" else palette.ink
 	home_title_accent.self_modulate = palette.accent
 	home_level.add_theme_color_override("font_color", palette.muted)
-	theme_button.text = _localized("Açık tema" if theme_name == "dark" else "Koyu tema")
+	_refresh_settings_text()
 	veil.color = palette.veil
 	settings_veil.color = palette.veil
+	levels_veil.color = palette.veil
+	levels_title.add_theme_color_override("font_color", palette.ink)
+	levels_stars_label.add_theme_color_override("font_color", palette.ink)
+	levels_stars_icon.self_modulate = palette.accent
+	levels_page_label.add_theme_color_override("font_color", palette.muted)
 	var modal := _style(palette.surface, 28)
 	modal.content_margin_left = 30
 	modal.content_margin_right = 30
@@ -752,6 +851,8 @@ func _apply_theme(next_theme: String) -> void:
 	panel.add_theme_stylebox_override("panel", modal)
 	settings_panel.add_theme_stylebox_override("panel", modal)
 	shop_panel.add_theme_stylebox_override("panel", modal)
+	levels_panel.add_theme_stylebox_override("panel", modal)
+	_refresh_levels()
 	_refresh_wallet()
 	for arrow in board_layer.get_children():
 		arrow.queue_redraw()
@@ -900,6 +1001,16 @@ func _build_home() -> void:
 	shop_button.accessibility_name = shop_button.tooltip_text
 	home_screen.add_child(shop_button)
 
+	levels_button = _button("", _show_levels.bind(true))
+	levels_button.icon = ICONS.levels
+	levels_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	levels_button.custom_minimum_size = Vector2(104, 104)
+	levels_button.expand_icon = true
+	levels_button.add_theme_constant_override("icon_max_width", 48)
+	levels_button.tooltip_text = _localized("Bölümler")
+	levels_button.accessibility_name = levels_button.tooltip_text
+	home_screen.add_child(levels_button)
+
 	daily_button = _button("", _claim_daily)
 	daily_button.icon = ICONS.gift
 	daily_button.custom_minimum_size = Vector2(0, TOUCH_MIN)
@@ -926,15 +1037,20 @@ func _build_home() -> void:
 	settings_title.add_theme_font_size_override("font_size", 38)
 	box.add_child(settings_title)
 	theme_button = _button("", _toggle_theme)
-	theme_button.custom_minimum_size.y = 104
-	box.add_child(theme_button)
+	vibration_button = _button("", _toggle_vibration)
+	sound_button = _button("", _toggle_sound)
 	restore_button = _button(_localized("Satın alımları geri yükle"), _restore_purchases)
 	privacy_button = _button(_localized("Gizlilik seçenekleri"), func(): Ads.show_privacy_options())
 	settings_close = _button(_localized("Kapat"), _show_settings.bind(false))
-	for button in [restore_button, privacy_button, settings_close]:
+	for button in _settings_buttons():
 		button.custom_minimum_size.y = 104
 		box.add_child(button)
-	_chain_focus([theme_button, restore_button, privacy_button, settings_close])
+	_chain_focus(_settings_buttons())
+	_build_levels()
+
+
+func _settings_buttons() -> Array:
+	return [theme_button, vibration_button, sound_button, restore_button, privacy_button, settings_close]
 
 
 func _home_label(text: String, font: Font, font_size: int) -> Label:
@@ -953,6 +1069,7 @@ func _show_home(open: bool) -> void:
 	home_button.visible = not open
 	hint_button.visible = not open
 	if not open:
+		_show_levels(false)
 		_show_settings(false)
 	_refresh_hint_button()
 	_layout_home(get_viewport_rect().size)
@@ -964,15 +1081,18 @@ func _show_home(open: bool) -> void:
 
 func _show_settings(open: bool) -> void:
 	settings_veil.visible = open
-	var menu_focus := Control.FOCUS_NONE if open else Control.FOCUS_ALL
-	for button in [play_button, settings_button, shop_button, daily_button]:
-		button.focus_mode = menu_focus
+	_set_home_focusable(not open)
 	if open:
 		privacy_button.visible = Ads.can_show_privacy_options()
-		_chain_focus([theme_button, restore_button, privacy_button, settings_close])
+		_chain_focus(_settings_buttons())
 		theme_button.grab_focus()
 	else:
 		settings_button.grab_focus()
+
+
+func _set_home_focusable(focusable: bool) -> void:
+	for button in [play_button, settings_button, shop_button, daily_button, levels_button]:
+		button.focus_mode = Control.FOCUS_ALL if focusable else Control.FOCUS_NONE
 
 
 ## Wraps up/down focus through the visible buttons of a modal.
@@ -1015,12 +1135,14 @@ func _layout_home(vs: Vector2) -> void:
 	play_button.position = Vector2(edge, safe.end.y - 204)
 	settings_button.position = Vector2(edge + width - 104, safe.position.y + 32)
 	shop_button.position = settings_button.position - Vector2(104 + 16, 0)
+	levels_button.position = shop_button.position - Vector2(104 + 16, 0)
 	daily_button.visible = Economy.can_claim_daily()
 	var gift := _next_daily_amount()
 	daily_button.text = _localized("Günlük hediye: +1 ipucu") if gift == 1 else _localized("Günlük hediye: +%d ipucu") % gift
 	daily_button.reset_size()
 	daily_button.size.x = minf(daily_button.size.x, width)
 	daily_button.position = Vector2(safe.get_center().x - daily_button.size.x * 0.5, home_level.position.y - 12 - TOUCH_MIN)
+	_layout_levels(vs)
 
 
 ## `fill` defaults to the surface colour; pass palette.cream for a visible well on a surface panel.
@@ -1220,8 +1342,10 @@ func _restore_purchases() -> void:
 
 # --- Daily gift ---
 
-## Mirrors Economy.claim_daily's streak rule so the pill can promise the right amount.
+## What the pill promises; older Economy builds lack next_daily_amount(), so mirror its rule then.
 func _next_daily_amount() -> int:
+	if Economy.has_method("next_daily_amount"):
+		return maxi(int(Economy.call("next_daily_amount")), 1)
 	var today := str(Economy.today_provider.call())
 	var next_streak: int = Economy.streak + 1 if Economy._is_day_before(Economy.last_daily, today) else 1
 	return Economy.DAILY_CYCLE_HINTS if next_streak % Economy.DAILY_CYCLE == 0 else Economy.DAILY_HINTS
@@ -1453,7 +1577,7 @@ func _layout_shop(vs: Vector2) -> void:
 func _show_shop(open: bool, from: Control = null) -> void:
 	if open == shop_veil.visible:
 		return
-	var background := [play_button, settings_button, shop_button, daily_button, hint_button, home_button, retry]
+	var background := [play_button, settings_button, shop_button, daily_button, levels_button, hint_button, home_button, retry]
 	for control in background:
 		control.focus_mode = Control.FOCUS_NONE if open else Control.FOCUS_ALL
 	if open:
@@ -1472,6 +1596,242 @@ func _show_shop(open: bool, from: Control = null) -> void:
 		if shop_return_focus and shop_return_focus.is_visible_in_tree():
 			shop_return_focus.grab_focus()
 	_refresh_hint_button()
+
+
+# --- Level select ---
+
+func _build_levels() -> void:
+	levels_veil = ColorRect.new()
+	levels_veil.z_index = 2
+	levels_veil.hide()
+	home_screen.add_child(levels_veil)
+	var center := CenterContainer.new()
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	levels_veil.add_child(center)
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	levels_panel = PanelContainer.new()
+	center.add_child(levels_panel)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 24)
+	levels_panel.add_child(box)
+
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 10)
+	box.add_child(header)
+	levels_title = Label.new()
+	levels_title.text = _localized("Bölümler")
+	levels_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	levels_title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	levels_title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	levels_title.add_theme_font_override("font", DISPLAY_FONT)
+	levels_title.add_theme_font_size_override("font_size", 38)
+	header.add_child(levels_title)
+	levels_stars_icon = TextureRect.new()
+	levels_stars_icon.texture = ICONS.star
+	levels_stars_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	levels_stars_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	levels_stars_icon.custom_minimum_size = Vector2(32, 32)
+	levels_stars_icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(levels_stars_icon)
+	levels_stars_label = Label.new()
+	levels_stars_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	levels_stars_label.add_theme_font_override("font", DISPLAY_FONT)
+	levels_stars_label.add_theme_font_size_override("font_size", 30)
+	header.add_child(levels_stars_label)
+	var header_gap := Control.new()
+	header_gap.custom_minimum_size.x = 14
+	header.add_child(header_gap)
+	levels_close = _icon_button(ICONS.close, _localized("Kapat"), _show_levels.bind(false))
+	header.add_child(levels_close)
+
+	levels_grid = GridContainer.new()
+	levels_grid.columns = LEVEL_COLUMNS
+	levels_grid.add_theme_constant_override("h_separation", int(LEVEL_GAP))
+	levels_grid.add_theme_constant_override("v_separation", int(LEVEL_GAP))
+	box.add_child(levels_grid)
+	for k in LEVELS_PER_PAGE:
+		var tile := _button("", _on_level_tile.bind(k))
+		var stack := VBoxContainer.new()
+		stack.alignment = BoxContainer.ALIGNMENT_CENTER
+		stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		stack.add_theme_constant_override("separation", 4)
+		tile.add_child(stack)
+		stack.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var number := Label.new()
+		number.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		number.add_theme_font_override("font", DISPLAY_FONT)
+		number.add_theme_font_size_override("font_size", 30)
+		stack.add_child(number)
+		var star_row := HBoxContainer.new()
+		star_row.alignment = BoxContainer.ALIGNMENT_CENTER
+		star_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		star_row.add_theme_constant_override("separation", 2)
+		stack.add_child(star_row)
+		var stars: Array = []
+		for j in 3:
+			var star := TextureRect.new()
+			star.texture = ICONS.star
+			star.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			star.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			star.custom_minimum_size = Vector2(20, 20)
+			star.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			star_row.add_child(star)
+			stars.append(star)
+		tile.set_meta("number", number)
+		tile.set_meta("star_row", star_row)
+		tile.set_meta("stars", stars)
+		levels_grid.add_child(tile)
+		level_tiles.append(tile)
+
+	var pager := HBoxContainer.new()
+	pager.add_theme_constant_override("separation", 16)
+	box.add_child(pager)
+	levels_prev = _icon_button(ICONS.prev, _localized("Önceki sayfa"), _turn_level_page.bind(-1))
+	pager.add_child(levels_prev)
+	levels_page_label = Label.new()
+	levels_page_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	levels_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	levels_page_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	levels_page_label.add_theme_font_override("font", BODY_FONT)
+	levels_page_label.add_theme_font_size_override("font_size", 26)
+	pager.add_child(levels_page_label)
+	levels_next = _icon_button(ICONS.next, _localized("Sonraki sayfa"), _turn_level_page.bind(1))
+	pager.add_child(levels_next)
+
+
+## Square icon-only button with a full touch target.
+func _icon_button(icon: Texture2D, label: String, cb: Callable) -> Button:
+	var b := _button("", cb)
+	b.icon = icon
+	b.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	b.custom_minimum_size = Vector2.ONE * TOUCH_MIN
+	b.expand_icon = true
+	b.add_theme_constant_override("icon_max_width", 40)
+	b.tooltip_text = label
+	b.accessibility_name = label
+	return b
+
+
+func _level_page_count() -> int:
+	return maxi(1, ceili(float(levels.size()) / LEVELS_PER_PAGE))
+
+
+## Highest playable index: one past the furthest starred level, and never below the saved level.
+func _highest_unlocked() -> int:
+	var top := -1
+	for i in levels.size():
+		if Economy.get_stars(i) > 0:
+			top = i
+	return mini(maxi(top + 1, idx), levels.size() - 1)
+
+
+func _level_unlocked(i: int) -> bool:
+	return i >= 0 and i < levels.size() and i <= _highest_unlocked()
+
+
+func _show_levels(open: bool) -> void:
+	if not levels_veil or open == levels_veil.visible:
+		return
+	levels_veil.visible = open
+	_set_home_focusable(not open)
+	if open:
+		levels_page = floori(float(idx) / LEVELS_PER_PAGE)
+		_layout_levels(get_viewport_rect().size)
+		_refresh_levels()
+		level_tiles[idx % LEVELS_PER_PAGE].grab_focus()
+	else:
+		levels_button.grab_focus()
+
+
+func _turn_level_page(step: int) -> void:
+	var page := clampi(levels_page + step, 0, _level_page_count() - 1)
+	if page == levels_page:
+		return
+	levels_page = page
+	_refresh_levels()
+	# Keep keyboard focus on the pager unless it just became disabled.
+	var pressed_button := levels_prev if step < 0 else levels_next
+	if pressed_button.disabled:
+		(levels_next if step < 0 else levels_prev).grab_focus()
+
+
+func _on_level_tile(slot: int) -> void:
+	var i := levels_page * LEVELS_PER_PAGE + slot
+	if not levels_veil.visible or not _level_unlocked(i):
+		return
+	_show_levels(false)
+	start(i)
+	_show_home(false)
+
+
+func _layout_levels(vs: Vector2) -> void:
+	if not levels_veil:
+		return
+	levels_veil.size = vs
+	var panel_width := minf(vs.x - 72, 680)
+	levels_panel.custom_minimum_size.x = panel_width
+	var inner := panel_width - 60
+	var tile_width := floorf((inner - LEVEL_GAP * (LEVEL_COLUMNS - 1)) / LEVEL_COLUMNS)
+	# Outer margin, panel padding, header, pager and two gaps; rows get what is left.
+	var rows := ceili(float(LEVELS_PER_PAGE) / LEVEL_COLUMNS)
+	var rows_height := vs.y - 96 - 72 - TOUCH_MIN * 2 - 48
+	var tile_height := maxf(minf(floorf((rows_height - LEVEL_GAP * (rows - 1)) / rows), tile_width), TOUCH_MIN)
+	for tile in level_tiles:
+		tile.custom_minimum_size = Vector2(tile_width, tile_height)
+	levels_panel.reset_size()
+
+
+func _refresh_levels() -> void:
+	if level_tiles.is_empty() or levels.is_empty():
+		return
+	var top := _highest_unlocked()
+	var first := levels_page * LEVELS_PER_PAGE
+	var total := levels.size()
+	for k in level_tiles.size():
+		var tile: Button = level_tiles[k]
+		var i := first + k
+		var present := i < total
+		var open := present and i <= top
+		var stars := Economy.get_stars(i) if open else 0
+		# Absent slots on the last page keep their space so the sheet never changes size.
+		tile.modulate.a = 1.0 if present else 0.0
+		tile.disabled = not open
+		tile.focus_mode = Control.FOCUS_ALL if open else Control.FOCUS_NONE
+		tile.mouse_filter = Control.MOUSE_FILTER_STOP if present else Control.MOUSE_FILTER_IGNORE
+		_style_level_tile(tile, open, present and i == idx)
+		var number: Label = tile.get_meta("number")
+		number.text = str(i + 1)
+		number.add_theme_color_override("font_color", palette.ink if open else palette.muted)
+		tile.get_meta("star_row").visible = open
+		var star_rects: Array = tile.get_meta("stars")
+		for j in star_rects.size():
+			star_rects[j].self_modulate = palette.accent if j < stars else palette.grid
+		tile.accessibility_name = (_localized("Bölüm %d, %d yıldız") % [i + 1, stars]) if open \
+			else _localized("Bölüm %d, kilitli") % (i + 1)
+	levels_page_label.text = "%d–%d / %d" % [first + 1, mini(first + LEVELS_PER_PAGE, total), total]
+	levels_prev.disabled = levels_page <= 0
+	levels_next.disabled = levels_page >= _level_page_count() - 1
+	for b in [levels_prev, levels_next]:
+		b.focus_mode = Control.FOCUS_NONE if b.disabled else Control.FOCUS_ALL
+	var total_stars := Economy.total_stars()
+	levels_stars_label.text = str(total_stars)
+	levels_stars_label.accessibility_name = _localized("Toplam yıldız: %d") % total_stars
+
+
+## Unlocked: a well on the panel; current level: accent ring; locked: outline only.
+func _style_level_tile(tile: Button, open: bool, current: bool) -> void:
+	_style_button(tile)
+	_style_neutral_button(tile, palette.cream)
+	if current:
+		for state in ["normal", "hover", "pressed"]:
+			var box := tile.get_theme_stylebox(state).duplicate() as StyleBoxFlat
+			box.set_border_width_all(4)
+			box.border_color = palette.accent
+			tile.add_theme_stylebox_override(state, box)
+	var locked := _style(Color.TRANSPARENT, 18)
+	locked.set_border_width_all(2)
+	locked.border_color = palette.grid
+	tile.add_theme_stylebox_override("disabled", locked)
 
 
 func _draw_home_art() -> void:

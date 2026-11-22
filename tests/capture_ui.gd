@@ -1,7 +1,8 @@
 extends SceneTree
 
 # XDG_DATA_HOME=$(mktemp -d) godot --path . --script tests/capture_ui.gd -- <output.png> <width> <height> <level> <state> <theme> [taps]
-# States: playing, mid, won, home, settings, shop, daily (gift claimed + toast), hint (highlighted hint), lost (revive panel).
+# States: playing, mid, won, home, settings, shop, daily (gift claimed + toast), hint (highlighted hint), lost (revive panel),
+# levels (level select; every level before <level> is cleared with 0-3 mistakes so tiles show stars).
 func _initialize() -> void:
 	if FileAccess.file_exists("user://save.json"):
 		printerr("Use an empty XDG_DATA_HOME for captures.")
@@ -28,8 +29,11 @@ func capture() -> void:
 	var game = load("res://main.tscn").instantiate()
 	viewport.add_child(game)
 	var state := args[4] if args.size() > 4 else "playing"
+	if state == "levels":
+		for i in level:
+			root.get_node("Economy").record_clear(i, i % 4)
 	game.start(level)
-	if state not in ["home", "settings", "shop", "daily"]:
+	if state not in ["home", "settings", "shop", "daily", "levels"]:
 		game.play_button.pressed.emit()
 	elif state == "settings":
 		game.settings_button.pressed.emit()
@@ -37,6 +41,8 @@ func capture() -> void:
 		game.shop_button.pressed.emit()
 	elif state == "daily":  # claim the gift so the toast shows
 		game.daily_button.pressed.emit()
+	elif state == "levels":
+		game.levels_button.pressed.emit()
 	if game.theme_name != selected_theme:
 		game._toggle_theme()
 	var win: Tween
