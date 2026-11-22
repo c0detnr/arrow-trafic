@@ -1,5 +1,5 @@
 extends Node
-## Economy autoload: hints, daily reward, stars and owned purchases.
+## Economy autoload: hints, daily reward, daily puzzle, stars and owned purchases.
 ## Persisted in its own file (never touches save.json); saves after every mutation.
 
 signal hints_changed(count: int)
@@ -14,6 +14,14 @@ const DAILY_CYCLE_HINTS := 3
 ## Every Nth distinct level cleared grants a bonus hint.
 const CLEAR_BONUS_EVERY := 10
 const MAX_TOKENS := 50
+## First win of each day's puzzle grants this many hints.
+const DAILY_PUZZLE_HINTS := 2
+## The daily puzzle comes from level index 150 onward (levels 151+, medium/hard) when the pack is
+## large enough; smaller packs use every level.
+const DAILY_PUZZLE_FIRST := 150
+## Days advance through the range by this stride; coprime with 850 (= levels 151..1000), so a full
+## 1000-level pack shows every level once before any repeats.
+const DAILY_PUZZLE_STRIDE := 379
 const DAY_SECONDS := 86400
 
 var save_path := "user://economy.json"
@@ -25,6 +33,9 @@ var ads_removed := false
 var last_daily := ""
 var streak := 0
 var levels_cleared := 0
+## ISO date of the last solved daily puzzle and the run of consecutive days ending on it.
+var daily_puzzle_last := ""
+var daily_puzzle_streak := 0
 var best_stars := {}
 var purchased: Array = []
 var consumed_tokens: Array = []
@@ -44,6 +55,8 @@ func _defaults() -> void:
 	last_daily = ""
 	streak = 0
 	levels_cleared = 0
+	daily_puzzle_last = ""
+	daily_puzzle_streak = 0
 	best_stars = {}
 	purchased = []
 	consumed_tokens = []
@@ -63,6 +76,8 @@ func load_data() -> void:
 	last_daily = str(data.get("last_daily", "")) if data.get("last_daily") is String else ""
 	streak = maxi(0, int(_num(data.get("streak"), 0)))
 	levels_cleared = maxi(0, int(_num(data.get("levels_cleared"), 0)))
+	daily_puzzle_last = str(data.get("daily_puzzle_last")) if data.get("daily_puzzle_last") is String else ""
+	daily_puzzle_streak = maxi(0, int(_num(data.get("daily_puzzle_streak"), 0)))
 	var stars = data.get("best_stars")
 	if stars is Dictionary:
 		for key in stars:
@@ -83,7 +98,8 @@ func _num(value, fallback: float) -> float:
 
 func save_data() -> void:
 	var text := JSON.stringify({"hints": hints, "ads_removed": ads_removed, "last_daily": last_daily,
-		"streak": streak, "levels_cleared": levels_cleared, "best_stars": best_stars,
+		"streak": streak, "levels_cleared": levels_cleared, "daily_puzzle_last": daily_puzzle_last,
+		"daily_puzzle_streak": daily_puzzle_streak, "best_stars": best_stars,
 		"purchased": purchased, "consumed_tokens": consumed_tokens})
 	# Write a temp file then rename so a kill mid-write cannot corrupt owned purchases.
 	var tmp := save_path + ".tmp"
@@ -179,6 +195,45 @@ func _is_day_before(earlier: String, later: String) -> bool:
 	var a := Time.get_unix_time_from_datetime_string(earlier)
 	var b := Time.get_unix_time_from_datetime_string(later)
 	return b - a == DAY_SECONDS
+
+
+# --- Daily puzzle ---
+
+## Today's puzzle as a level index: the same for every player on a date and stable across restarts.
+func daily_puzzle_index(level_count: int) -> int:
+	if level_count <= 0:
+		return 0
+	var first := DAILY_PUZZLE_FIRST if level_count > DAILY_PUZZLE_FIRST else 0
+	var day := floori(Time.get_unix_time_from_datetime_string(_today()) / float(DAY_SECONDS))
+	return first + posmod(day * DAILY_PUZZLE_STRIDE, level_count - first)
+
+
+## Like the daily gift, a date before the last solve counts as done (no farming by clock changes).
+func is_daily_puzzle_done() -> bool:
+	return not _today() > daily_puzzle_last
+
+
+## Records today's solve; returns hints granted (0 if already solved today or the date went back).
+func complete_daily_puzzle() -> int:
+	if is_daily_puzzle_done():
+		return 0
+	var today := _today()
+	daily_puzzle_streak = daily_puzzle_streak + 1 if _is_day_before(daily_puzzle_last, today) else 1
+	daily_puzzle_last = today
+	hints += DAILY_PUZZLE_HINTS
+	save_data()
+	hints_changed.emit(hints)
+	return DAILY_PUZZLE_HINTS
+
+
+## Current run of solved days: kept while today or yesterday was solved, otherwise 0.
+func daily_puzzle_streak_count() -> int:
+	var today := _today()
+	if daily_puzzle_last.is_empty():
+		return 0
+	if daily_puzzle_last >= today or _is_day_before(daily_puzzle_last, today):
+		return daily_puzzle_streak
+	return 0
 
 
 # --- Stars and clears ---

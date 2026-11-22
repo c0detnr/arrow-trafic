@@ -82,6 +82,10 @@ const ENGLISH_TEXT := {
 	"Titreşim: Kapalı": "Vibration: Off",
 	"Ses: Açık": "Sound: On",
 	"Ses: Kapalı": "Sound: Off",
+	"Günün bulmacası": "Daily puzzle",
+	"Günün bulmacası ✓": "Daily puzzle ✓",
+	" · %d gün": " · %d days",
+	"+%d ipucu · Günün bulmacası": "+%d hints · Daily puzzle",
 }
 const HUD_ICONS := {
 	"remaining": preload("res://assets/remaining.svg"),
@@ -100,6 +104,7 @@ const ICONS := {
 	"close": preload("res://assets/close.svg"),
 	"prev": preload("res://assets/chevron-left.svg"),
 	"next": preload("res://assets/chevron-right.svg"),
+	"daily_puzzle": preload("res://assets/daily-puzzle.svg"),
 }
 ## Store rows in display order with their Turkish names (English via ENGLISH_TEXT).
 const SHOP_PRODUCTS := {
@@ -193,6 +198,12 @@ var shop_unavailable: Label
 var shop_close: Button
 var shop_return_focus: Control
 var daily_button: Button
+# Daily puzzle: one level per calendar day, played on the normal board without touching the
+# campaign. `idx` is the level on the board; `campaign_idx` is where the campaign resumes.
+var daily_puzzle_button: Button
+var daily_mode := false
+var campaign_idx := 0
+var campaign_resume := {}  # {"s", "history"} of a campaign board left mid-play, else empty
 var restore_button: Button
 var privacy_button: Button
 var toast: PanelContainer
@@ -270,7 +281,7 @@ func _load_save() -> Dictionary:
 func _save() -> void:
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f:
-		f.store_string(JSON.stringify({"level": idx, "theme": theme_name, "vibration": vibration_on, "sound": sound_on}))
+		f.store_string(JSON.stringify({"level": campaign_level(), "theme": theme_name, "vibration": vibration_on, "sound": sound_on}))
 
 
 func _toggle_theme() -> void:
@@ -310,7 +321,17 @@ func _play_win_chime() -> void:
 		win_sound.play()
 
 
+## The saved campaign level (the daily puzzle never changes it).
+func campaign_level() -> int:
+	return campaign_idx if daily_mode else idx
+
+
 func start(i: int, entering := false) -> void:
+	_load_board(i, Logic.new_state(levels[i]), [], entering)
+
+
+## Puts level `i` on the board with `state` (fresh, or a resumed campaign board) and its undo history.
+func _load_board(i: int, state: Dictionary, past: Array, entering := false) -> void:
 	if win_tween and not entering:
 		win_tween.kill()
 		win_tween = null
@@ -322,8 +343,8 @@ func start(i: int, entering := false) -> void:
 	input_locked = entering
 	idx = i
 	_save()
-	s = Logic.new_state(levels[idx])
-	history.clear()
+	s = state
+	history = past
 	revive_target = -1
 	blocked_streak = 0
 	win_stars = 0
@@ -517,7 +538,13 @@ func _tap(pos: Vector2) -> void:
 		t.tween_property(n, "position", n.position + d * cell * (maxi(s.w, s.h) + 2), 0.3)
 		t.parallel().tween_property(n, "modulate:a", 0.0, 0.3)
 		t.tween_callback(n.queue_free)
-		if r == "won":
+		if r == "won" and daily_mode:
+			win_stars = 0  # stars are campaign-only
+			var granted := Economy.complete_daily_puzzle()
+			if granted > 0:
+				_toast(_localized("+%d ipucu · Günün bulmacası") % granted)
+			_celebrate_win(t)
+		elif r == "won":
 			var clear: Dictionary = Economy.record_clear(idx, s.mistakes)
 			win_stars = int(clear.stars)
 			if int(clear.bonus_hints) > 0:
@@ -547,6 +574,14 @@ func _celebrate_win(t: Tween) -> void:
 	t.tween_method(_show_celebration, 0.0, 1.0, 0.9)
 	t.tween_property(board_layer, "modulate:a", 0.0, 0.3)
 	t.parallel().tween_method(_move_board, 0.0, -18.0, 0.3).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	if daily_mode:
+		# The daily puzzle is an ad-free treat: no interstitial, pacing count or review; back to Home.
+		t.tween_callback(func():
+			win_tween = null
+			input_locked = false
+			retry.disabled = false
+			_show_home(true))
+		return
 	# Interstitial (Ads applies its own pacing) only while the board is gone and input is locked.
 	win_ad_shown = false
 	t.tween_callback(func():
@@ -701,7 +736,7 @@ func _draw() -> void:
 	var vs := get_viewport_rect().size
 	draw_rect(Rect2(Vector2.ZERO, vs), palette.cream)
 	var width := vs.x - 2 * left
-	var title := _localized("Bölüm %02d") % (idx + 1)
+	var title := _board_title()
 	_text(Vector2(left, 112), title, _title_font_size(title), palette.ink, -1, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 	# The queue's first item gets a fixed slot; the preview fits the remaining width.
@@ -746,9 +781,13 @@ func _draw() -> void:
 			draw_circle(pos, 25, palette.arrows[s.pocket[k]], true, -1, true)
 			_mark(self, pos, 9, s.pocket[k])
 
-	if idx == 0:
+	if idx == 0 and not daily_mode:
 		_text(Vector2(left, vs.y - 62), _localized("Çıkışı açık bir oka dokun."), 26, palette.muted, width, HORIZONTAL_ALIGNMENT_CENTER)
 		_text(Vector2(left, vs.y - 30), _localized("Sırası gelmeyen renkler cepte bekler."), 24, palette.muted, width, HORIZONTAL_ALIGNMENT_CENTER)
+
+
+func _board_title() -> String:
+	return _localized("Günün bulmacası") if daily_mode else _localized("Bölüm %02d") % (idx + 1)
 
 
 func _draw_board() -> void:
@@ -819,7 +858,7 @@ func _apply_theme(next_theme: String) -> void:
 	panel_label.add_theme_color_override("font_color", palette.ink)
 	home_screen.color = palette.cream
 	home_art.queue_redraw()
-	for button in [settings_button, settings_close, shop_button, shop_close, daily_button, levels_button]:
+	for button in [settings_button, settings_close, shop_button, shop_close, daily_button, daily_puzzle_button, levels_button]:
 		_style_neutral_button(button)
 	# Wells on the surface panels so each row reads as a button.
 	for button in [vibration_button, sound_button, restore_button, privacy_button, levels_close, levels_prev, levels_next]:
@@ -833,6 +872,8 @@ func _apply_theme(next_theme: String) -> void:
 	daily_button.add_theme_color_override("icon_hover_color", palette.accent)
 	daily_button.add_theme_color_override("icon_pressed_color", palette.accent)
 	_pad_button(daily_button, 30)
+	_pad_button(daily_puzzle_button, 30)
+	_refresh_daily_puzzle_button()
 	var badge := _style(palette.ink, 18)
 	badge.set_border_width_all(3)
 	badge.border_color = palette.cream
@@ -1044,6 +1085,12 @@ func _build_home() -> void:
 	daily_button.add_theme_constant_override("h_separation", 14)
 	home_screen.add_child(daily_button)
 
+	daily_puzzle_button = _button("", _start_daily_puzzle)
+	daily_puzzle_button.icon = ICONS.daily_puzzle
+	daily_puzzle_button.custom_minimum_size = Vector2(0, TOUCH_MIN)
+	daily_puzzle_button.add_theme_constant_override("h_separation", 14)
+	home_screen.add_child(daily_puzzle_button)
+
 	settings_veil = ColorRect.new()
 	settings_veil.z_index = 2
 	settings_veil.hide()
@@ -1091,6 +1138,8 @@ func _home_label(text: String, font: Font, font_size: int) -> Label:
 
 
 func _show_home(open: bool) -> void:
+	if open and daily_mode:
+		_leave_daily_puzzle()
 	home_screen.visible = open
 	retry.visible = not open
 	home_button.visible = not open
@@ -1100,6 +1149,8 @@ func _show_home(open: bool) -> void:
 		_show_settings(false)
 	_refresh_hint_button()
 	_layout_home(get_viewport_rect().size)
+	if toast.visible:
+		_place_toast()  # e.g. the daily puzzle reward, shown at the win and still up on Home
 	if open:
 		play_button.grab_focus()
 	else:
@@ -1118,7 +1169,7 @@ func _show_settings(open: bool) -> void:
 
 
 func _set_home_focusable(focusable: bool) -> void:
-	for button in [play_button, settings_button, shop_button, daily_button, levels_button]:
+	for button in [play_button, settings_button, shop_button, daily_button, daily_puzzle_button, levels_button]:
 		button.focus_mode = Control.FOCUS_ALL if focusable else Control.FOCUS_NONE
 
 
@@ -1140,10 +1191,11 @@ func _layout_home(vs: Vector2) -> void:
 	var width := minf(safe.size.x - 108, 780)
 	var edge := safe.position.x + (safe.size.x - width) * 0.5
 	var is_home := home_screen.visible
-	# The art sits between the title (ends at +390) and the daily gift row (starts 394 above the
-	# bottom). The row is reserved even when hidden so claiming it never shifts the art.
+	# The art sits between the title (ends at +390) and the daily gift row (starts 506 above the
+	# bottom), above the daily puzzle row. The gift row is reserved even when hidden so claiming it
+	# never shifts the art or the puzzle entry.
 	var art_top := 400.0
-	var art_bottom := safe.size.y - 408
+	var art_bottom := safe.size.y - 520
 	var art_scale := minf(width / 600.0, (art_bottom - art_top) / 440.0)
 	home_art.position = Vector2(safe.get_center().x, safe.position.y + (art_top + art_bottom) * 0.5)
 	home_art.scale = Vector2.ONE * art_scale
@@ -1155,7 +1207,8 @@ func _layout_home(vs: Vector2) -> void:
 	home_title.position = Vector2(edge, safe.position.y + 150)
 	home_title.size = Vector2(minf(width, 550), 240)
 	var stars := Economy.total_stars()
-	home_level.text = _localized("Bölüm %02d · ★ %d") % [idx + 1, stars] if stars > 0 else _localized("Bölüm %02d") % (idx + 1)
+	var level := campaign_level() + 1
+	home_level.text = _localized("Bölüm %02d · ★ %d") % [level, stars] if stars > 0 else _localized("Bölüm %02d") % level
 	home_level.position = Vector2(edge, safe.end.y - 282)
 	home_level.size.x = width
 	play_button.size = Vector2(width, 120)
@@ -1166,9 +1219,13 @@ func _layout_home(vs: Vector2) -> void:
 	daily_button.visible = Economy.can_claim_daily()
 	var gift := _next_daily_amount()
 	daily_button.text = _localized("Günlük hediye: +1 ipucu") if gift == 1 else _localized("Günlük hediye: +%d ipucu") % gift
-	daily_button.reset_size()
-	daily_button.size.x = minf(daily_button.size.x, width)
-	daily_button.position = Vector2(safe.get_center().x - daily_button.size.x * 0.5, home_level.position.y - 12 - TOUCH_MIN)
+	_refresh_daily_puzzle_button()
+	for row in [daily_puzzle_button, daily_button]:
+		row.reset_size()
+		row.size.x = minf(row.size.x, width)
+	var puzzle_y := home_level.position.y - 12 - TOUCH_MIN
+	daily_puzzle_button.position = Vector2(safe.get_center().x - daily_puzzle_button.size.x * 0.5, puzzle_y)
+	daily_button.position = Vector2(safe.get_center().x - daily_button.size.x * 0.5, puzzle_y - 12 - TOUCH_MIN)
 	_layout_levels(vs)
 
 
@@ -1405,6 +1462,53 @@ func _claim_daily() -> void:
 	_layout_home(get_viewport_rect().size)
 
 
+# --- Daily puzzle ---
+
+## "Günün bulmacası", with ✓ once solved today and the run of days when it is longer than one.
+func _refresh_daily_puzzle_button() -> void:
+	if not daily_puzzle_button:
+		return
+	var done := Economy.is_daily_puzzle_done()
+	var text := _localized("Günün bulmacası ✓" if done else "Günün bulmacası")
+	var days := Economy.daily_puzzle_streak_count()
+	if days > 1:
+		text += _localized(" · %d gün") % days
+	daily_puzzle_button.text = text
+	daily_puzzle_button.accessibility_name = text
+	# Solved: a quiet, muted row (still tappable for a replay). Open: the accent calendar invites.
+	var glyph: Color = palette.muted if done else palette.accent
+	var label: Color = palette.muted if done else palette.ink
+	for state in ["normal", "hover", "pressed"]:
+		daily_puzzle_button.add_theme_color_override("icon_" + state + "_color", glyph)
+	daily_puzzle_button.add_theme_color_override("font_color", label)
+
+
+## Plays today's puzzle on the normal board; the campaign level and board are kept to resume.
+func _start_daily_puzzle() -> void:
+	if daily_mode or levels.is_empty():
+		return
+	_show_levels(false)
+	_show_settings(false)
+	var status: String = s.get("status", "")
+	# A campaign win still in its transition resumes on the next level; a loss replays the level.
+	campaign_idx = (idx + 1) % levels.size() if status == "won" else idx
+	campaign_resume = {"s": s, "history": history} if status == "playing" else {}
+	daily_mode = true
+	start(Economy.daily_puzzle_index(levels.size()))
+	_show_home(false)
+
+
+## Back to the campaign exactly where it was (called by _show_home(true)).
+func _leave_daily_puzzle() -> void:
+	daily_mode = false
+	var resume := campaign_resume
+	campaign_resume = {}
+	if resume.is_empty():
+		start(campaign_idx)
+	else:
+		_load_board(campaign_idx, resume.s, resume.history)
+
+
 # --- Toast ---
 
 func _toast(text: String) -> void:
@@ -1428,10 +1532,15 @@ func _toast(text: String) -> void:
 	toast_tween.tween_callback(toast.hide)
 
 
-## Bottom centre, just above the pocket heading (and over the daily gift row on Home).
+## Bottom centre: just above the pocket heading in a level; on Home, over the daily gift row so the
+## daily puzzle entry below it stays readable.
 func _place_toast() -> void:
 	var vs := get_viewport_rect().size
-	toast.position = Vector2((vs.x - toast.size.x) * 0.5, vs.y - 300 - toast.size.y)
+	var bottom := vs.y - 300
+	if home_screen.visible:
+		var row_end := daily_puzzle_button.position.y - 12
+		bottom = minf(row_end - (TOUCH_MIN - toast.size.y) * 0.5, row_end)
+	toast.position = Vector2((vs.x - toast.size.x) * 0.5, bottom - toast.size.y)
 
 
 # --- Shop ---
@@ -1621,7 +1730,8 @@ func _layout_shop(vs: Vector2) -> void:
 func _show_shop(open: bool, from: Control = null) -> void:
 	if open == shop_veil.visible:
 		return
-	var background := [play_button, settings_button, shop_button, daily_button, levels_button, hint_button, home_button, retry]
+	var background := [play_button, settings_button, shop_button, daily_button, daily_puzzle_button, levels_button, hint_button,
+		home_button, retry]
 	for control in background:
 		control.focus_mode = Control.FOCUS_NONE if open else Control.FOCUS_ALL
 	if open:

@@ -75,12 +75,12 @@ func run():
 		var screen := Rect2(Vector2.ZERO, Vector2(logical_size))
 		var scale_factor := float(native_size.x) / logical_size.x
 		for control in [game.home_title, game.home_level, game.play_button, game.settings_button, game.shop_button, game.daily_button,
-				game.hint_button, game.levels_button]:
+				game.hint_button, game.levels_button, game.daily_puzzle_button]:
 			check(screen.encloses(control.get_rect()))
 		for button in [game.play_button, game.settings_button, game.theme_button, game.settings_close, game.shop_button,
 				game.daily_button, game.hint_button, game.restore_button, game.privacy_button, game.shop_close, game.revive_ad_button,
 				game.revive_hint_button, game.panel_retry, game.levels_button, game.vibration_button, game.sound_button,
-				game.levels_close, game.levels_prev, game.levels_next, game.level_tiles[0]]:
+				game.levels_close, game.levels_prev, game.levels_next, game.level_tiles[0], game.daily_puzzle_button]:
 			check(button.get_combined_minimum_size().x * scale_factor >= 44 and button.get_combined_minimum_size().y * scale_factor >= 44,
 				"%s too small at %s" % [button.accessibility_name, native_size])
 		check(game.hint_button.size.x * scale_factor >= 44 and game.hint_button.size.y * scale_factor >= 44)
@@ -88,6 +88,13 @@ func run():
 		check(game.home_title.get_rect().end.y < game.home_art.position.y - 220 * game.home_art.scale.y)
 		check(game.home_art.position.y + 220 * game.home_art.scale.y < game.daily_button.position.y)
 		check(game.daily_button.get_rect().end.y < game.home_level.position.y)
+		# Daily puzzle entry: between the gift row and the level label, its own row, never clipped.
+		check(game.daily_puzzle_button.visible and game.daily_puzzle_button.text == "Günün bulmacası")
+		check(game.daily_puzzle_button.size.y * scale_factor >= 44, "daily puzzle entry too short at %s" % native_size)
+		check(game.daily_button.get_rect().end.y < game.daily_puzzle_button.position.y)
+		check(game.daily_puzzle_button.get_rect().end.y < game.home_level.position.y)
+		check(game.home_art.position.y + 220 * game.home_art.scale.y < game.daily_puzzle_button.position.y)
+		check(game.daily_puzzle_button.size.x >= game.daily_puzzle_button.get_combined_minimum_size().x, "daily puzzle label fits")
 		check(game.shop_button.get_rect().end.x < game.settings_button.position.x)
 		check(game.levels_button.get_rect().end.x < game.shop_button.position.x)
 		check(game.levels_button.get_rect().end.y < game.home_title.position.y)
@@ -278,6 +285,7 @@ func run():
 	await settings_toggles(game)
 	await interstitial_timing(game, economy, ads)
 	await revive_to_winnable(game)
+	await daily_puzzle(game, economy, ads)
 	purchase_messages(game)
 	game.queue_free()
 	await process_frame
@@ -286,6 +294,7 @@ func run():
 	root.add_child(english)
 	check(english.home_level.text == "Level 01 · ★ %d" % economy.total_stars() and english.play_button.text == "Play")
 	check(english.shop_title.text == "Shop" and english.revive_ad_button.accessibility_name == "Watch ad · Undo")
+	check(english.daily_puzzle_button.text.begins_with("Daily puzzle"), english.daily_puzzle_button.text)
 	for key in english.ENGLISH_TEXT:
 		check(english._localized(key) == english.ENGLISH_TEXT[key])
 	check(not ProjectSettings.get_setting("application/config/quit_on_go_back"))
@@ -751,6 +760,148 @@ func revive_to_winnable(game) -> void:
 	check(game.s.status == "lost" and game.panel.visible)
 	game.panel_retry.pressed.emit()
 	check(game.s.status == "playing" and not game.panel.visible)
+	game.start(0)
+	game._show_home(true)
+
+
+## Wins the board on the board's solver path (the daily levels are too hard for _win_current).
+func _solve_current(game) -> void:
+	while game.s.status == "playing":
+		var pick: int = game.Logic.hint(game.s)
+		check(pick >= 0, "solver found a move")
+		if pick < 0:
+			return
+		game._tap(center_of(game, pick))
+
+
+## Plays today's puzzle to a win (the transition included) and returns once Home is back.
+func _win_daily(game) -> void:
+	_solve_current(game)
+	check(game.s.status == "won")
+	var tween: Tween = game.win_tween
+	check(tween != null and game.input_locked)
+	if tween and tween.is_valid() and tween.is_running():
+		await tween.finished
+	await process_frame
+
+
+func daily_puzzle(game, economy: Node, ads: Node) -> void:
+	var screen := Rect2(Vector2.ZERO, Vector2(root.size))
+	game.levels = game._load_levels()
+	economy.today_provider = func() -> String: return "2026-03-05"
+	economy.daily_puzzle_last = ""
+	economy.daily_puzzle_streak = 0
+	var review := _install_review_spy()
+	# A campaign board left mid-play on level 3.
+	game.start(2)
+	game._show_home(false)
+	for i in game.s.arrows.size():
+		if game.Logic.can_exit(game.s, i):
+			game._tap(center_of(game, i))
+			break
+	var campaign_state: Dictionary = game.s.duplicate(true)
+	var campaign_history: int = game.history.size()
+	check(campaign_history == 1)
+	game._show_home(true)
+	check(game.daily_puzzle_button.is_visible_in_tree() and game.daily_puzzle_button.text == "Günün bulmacası")
+	check(game.daily_puzzle_button.get_theme_color("icon_normal_color") == game.palette.accent)
+	var target: int = economy.daily_puzzle_index(game.levels.size())
+	check(target >= 150 and target < game.levels.size())
+	# Starting it: the daily board, its title, and the saved campaign level untouched.
+	game.daily_puzzle_button.pressed.emit()
+	check(game.daily_mode and not game.home_screen.visible and game.idx == target)
+	check(game.s.arrows.size() == game.levels[target].arrows.size() and game.history.is_empty())
+	check(game._board_title() == "Günün bulmacası" and game._load_save().level == 2)
+	check(game.retry.visible and game.home_button.visible and game.hint_button.visible and not game.hint_button.disabled)
+	# Restart keeps the daily puzzle; hints work as usual.
+	for i in game.s.arrows.size():
+		if game.Logic.can_exit(game.s, i):
+			game._tap(center_of(game, i))
+			break
+	game.retry.pressed.emit()
+	check(game.daily_mode and game.idx == target and game.s.arrows.size() == game.levels[target].arrows.size())
+	check(game._load_save().level == 2, "restarting the daily puzzle does not save it as the campaign level")
+	var hints: int = economy.get_hints()
+	game.hint_button.pressed.emit()
+	check(economy.get_hints() == hints - 1 and game.hinted_id != -1)
+	# Home from the daily puzzle: the campaign board is back exactly as it was.
+	game.home_button.pressed.emit()
+	check(game.home_screen.visible and not game.daily_mode and game.idx == 2)
+	check(game.s == campaign_state and game.history.size() == campaign_history)
+	check(game.home_level.text.begins_with("Bölüm 03") and game._load_save().level == 2)
+	check(not economy.is_daily_puzzle_done() and game.daily_puzzle_button.text == "Günün bulmacası")
+	# Android back from the daily puzzle does the same.
+	game.daily_puzzle_button.pressed.emit()
+	check(game.daily_mode)
+	game.notification(Node.NOTIFICATION_WM_GO_BACK_REQUEST)
+	check(game.home_screen.visible and not game.daily_mode and game.idx == 2 and game.s == campaign_state)
+	# Win: +2 hints once, celebration, back Home; no stars, clears, ad pacing or review.
+	var cleared: int = economy.levels_cleared
+	var starred: int = economy.best_stars.size()
+	var ad_wins: int = ads._wins_since_interstitial
+	var shown_ads: int = ads.backend.shown_interstitials
+	hints = economy.get_hints()
+	game.daily_puzzle_button.pressed.emit()
+	var hud_title: String = game._board_title()
+	_solve_current(game)
+	check(game.s.status == "won" and game.input_locked and game.mascot_state == "win" and game.win_stars == 0)
+	check(economy.get_hints() == hints + 2 and economy.is_daily_puzzle_done())
+	check(game.toast.visible and game.toast_label.text == "+2 ipucu · Günün bulmacası")
+	check(hud_title == "Günün bulmacası")
+	var tween: Tween = game.win_tween
+	var celebrated := false
+	var guard := 0
+	while game.daily_mode and guard < 600:
+		guard += 1
+		celebrated = celebrated or game.celebration > 0.0
+		await process_frame
+	check(celebrated, "the win celebration plays for the daily puzzle")
+	if tween and tween.is_valid() and tween.is_running():
+		await tween.finished
+	await process_frame
+	check(game.home_screen.visible and not game.input_locked and not game.retry.disabled and game.win_tween == null)
+	check(game.idx == 2 and game.s == campaign_state and game.history.size() == campaign_history, "campaign resumes")
+	check(economy.levels_cleared == cleared and economy.best_stars.size() == starred and economy.get_stars(target) == 0,
+		"no record_clear for the daily puzzle")
+	check(ads._wins_since_interstitial == ad_wins and ads.backend.shown_interstitials == shown_ads,
+		"daily puzzle win skips Ads.on_level_cleared")
+	check(review[0].calls.is_empty(), "no review prompt after the daily puzzle")
+	check(game._load_save().level == 2)
+	check(game.daily_puzzle_button.text == "Günün bulmacası ✓")
+	check(game.daily_puzzle_button.get_theme_color("icon_normal_color") == game.palette.muted)
+	check(screen.encloses(game.toast.get_rect()) and not game.toast.get_rect().intersects(game.daily_puzzle_button.get_rect()),
+		"reward toast on Home leaves the daily puzzle entry readable")
+	# Replay is allowed but grants nothing.
+	hints = economy.get_hints()
+	game.daily_puzzle_button.pressed.emit()
+	check(game.daily_mode and game.idx == target)
+	await _win_daily(game)
+	check(economy.get_hints() == hints and game.home_screen.visible and not game.daily_mode and game.idx == 2)
+	# Next day: a new puzzle, and the streak shows once it is longer than one day.
+	economy.today_provider = func() -> String: return "2026-03-06"
+	game._layout_home(Vector2(root.size))
+	check(game.daily_puzzle_button.text == "Günün bulmacası")
+	var tomorrow: int = economy.daily_puzzle_index(game.levels.size())
+	check(tomorrow != target and tomorrow >= 150)
+	game.daily_puzzle_button.pressed.emit()
+	check(game.idx == tomorrow)
+	await _win_daily(game)
+	check(economy.get_hints() == hints + 2 and game.daily_puzzle_button.text == "Günün bulmacası ✓ · 2 gün")
+	check(screen.encloses(game.daily_puzzle_button.get_rect()))
+	# The campaign continues afterwards: Play resumes level 3 and a win advances to level 4.
+	game.play_button.pressed.emit()
+	check(not game.home_screen.visible and game.idx == 2 and game.s == campaign_state and not game.daily_mode)
+	_solve_current(game)
+	check(game.s.status == "won" and game.win_stars > 0 and economy.get_stars(2) > 0, "campaign wins still record stars")
+	# Leaving mid-transition for the daily puzzle still moves the campaign on to level 4.
+	game._show_home(true)
+	game.daily_puzzle_button.pressed.emit()
+	check(game.daily_mode and game.win_tween == null and game._load_save().level == 3)
+	game.home_button.pressed.emit()
+	check(game.idx == 3 and game.s.status == "playing" and not game.input_locked and game._load_save().level == 3)
+	check(game.s.arrows.size() == game.levels[3].arrows.size())
+	_remove_review_spy(review)
+	economy.today_provider = func() -> String: return "2026-03-01"
 	game.start(0)
 	game._show_home(true)
 

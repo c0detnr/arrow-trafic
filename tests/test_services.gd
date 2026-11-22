@@ -49,6 +49,7 @@ func frames(n := 2) -> void:
 
 func run() -> void:
 	test_economy()
+	test_daily_puzzle()
 	await test_ads()
 	await test_ads_ready_signal()
 	await test_iap()
@@ -169,6 +170,82 @@ func test_economy() -> void:
 	check(economy.purchased == ["remove_ads"], "non-string ids dropped")
 	economy.reset_for_tests()
 	check(not FileAccess.file_exists(TEST_SAVE) and not FileAccess.file_exists("user://save.json"), "economy never writes save.json")
+
+
+func test_daily_puzzle() -> void:
+	economy.reset_for_tests()
+	fake_today = "2026-11-22"
+	# Deterministic per date, inside levels 151..1000, and different on other days.
+	var today_index: int = economy.daily_puzzle_index(1000)
+	check(today_index == economy.daily_puzzle_index(1000), "daily puzzle: same index for the same date")
+	var copy: Node = load("res://services/economy.gd").new()
+	copy.today_provider = func() -> String: return "2026-11-22"
+	check(copy.daily_puzzle_index(1000) == today_index, "daily puzzle: a fresh Economy (restart) picks the same level")
+	copy.free()
+	var seen := {}
+	for day in 850:
+		fake_today = Time.get_date_string_from_unix_time(Time.get_unix_time_from_datetime_string("2026-01-01") + day * 86400)
+		var index: int = economy.daily_puzzle_index(1000)
+		check(index >= 150 and index <= 999, "daily puzzle: %d in levels 151..1000 on %s" % [index, fake_today])
+		seen[index] = true
+	check(seen.size() == 850, "daily puzzle: 850 consecutive days never repeat a level (%d distinct)" % seen.size())
+	fake_today = "2026-11-22"
+	var small: int = economy.daily_puzzle_index(10)
+	check(small >= 0 and small < 10, "daily puzzle: a small pack uses its whole range")
+	check(economy.daily_puzzle_index(0) == 0, "daily puzzle: empty pack does not crash")
+	# Completion: once per day, +2 hints, streak.
+	check(not economy.is_daily_puzzle_done() and economy.daily_puzzle_streak_count() == 0, "daily puzzle: fresh state")
+	var hints: int = economy.get_hints()
+	check(economy.complete_daily_puzzle() == 2 and economy.get_hints() == hints + 2, "daily puzzle: first win grants 2")
+	check(economy.is_daily_puzzle_done() and economy.daily_puzzle_streak_count() == 1, "daily puzzle: done, streak 1")
+	check(economy.complete_daily_puzzle() == 0 and economy.get_hints() == hints + 2, "daily puzzle: replay grants nothing")
+	check(economy.can_claim_daily(), "daily puzzle does not claim the daily gift")
+	fake_today = "2026-11-23"
+	check(not economy.is_daily_puzzle_done() and economy.daily_puzzle_streak_count() == 1, "daily puzzle: next day open, streak kept")
+	check(economy.complete_daily_puzzle() == 2 and economy.daily_puzzle_streak_count() == 2, "daily puzzle: streak continues")
+	fake_today = "2026-11-24"
+	check(economy.complete_daily_puzzle() == 2 and economy.daily_puzzle_streak == 3, "daily puzzle: third day")
+	# Month and year boundaries are consecutive days.
+	economy.daily_puzzle_last = "2026-12-31"
+	fake_today = "2027-01-01"
+	check(economy.complete_daily_puzzle() == 2 and economy.daily_puzzle_streak == 4, "daily puzzle: streak across new year")
+	# A missed day: the shown streak drops to 0 and the next solve starts over at 1.
+	fake_today = "2027-01-03"
+	check(economy.daily_puzzle_streak_count() == 0, "daily puzzle: gap hides the old streak")
+	check(economy.complete_daily_puzzle() == 2 and economy.daily_puzzle_streak_count() == 1, "daily puzzle: gap resets streak")
+	# Backward dates (clock moved back) count as done and grant nothing.
+	hints = economy.get_hints()
+	for day in ["2027-01-02", "2026-06-01"]:
+		fake_today = day
+		check(economy.is_daily_puzzle_done() and economy.complete_daily_puzzle() == 0,
+			"daily puzzle: %s before the last solve grants nothing" % day)
+	check(economy.get_hints() == hints and economy.daily_puzzle_last == "2027-01-03" and economy.daily_puzzle_streak == 1,
+		"daily puzzle: backward dates leave state unchanged")
+	fake_today = "2027-01-04"
+	check(economy.complete_daily_puzzle() == 2 and economy.daily_puzzle_streak == 2, "daily puzzle: next real day continues")
+	# Persisted with the rest of economy.json.
+	copy = load("res://services/economy.gd").new()
+	copy.save_path = TEST_SAVE
+	copy.today_provider = func() -> String: return "2027-01-04"
+	copy.load_data()
+	check(copy.daily_puzzle_last == "2027-01-04" and copy.daily_puzzle_streak == 2 and copy.is_daily_puzzle_done(),
+		"daily puzzle: reload keeps last date and streak")
+	copy.free()
+	var file := FileAccess.open(TEST_SAVE, FileAccess.READ)
+	var saved = JSON.parse_string(file.get_as_text())
+	file.close()
+	check(saved.daily_puzzle_last == "2027-01-04" and int(saved.daily_puzzle_streak) == 2, "daily puzzle: keys in economy.json")
+	# Older saves without the keys (or with bad values) load as never solved.
+	for text in ['{"hints": 4, "streak": 2}', '{"daily_puzzle_last": 5, "daily_puzzle_streak": "x"}']:
+		file = FileAccess.open(TEST_SAVE, FileAccess.WRITE)
+		file.store_string(text)
+		file.close()
+		economy.load_data()
+		check(economy.daily_puzzle_last == "" and economy.daily_puzzle_streak == 0 and not economy.is_daily_puzzle_done(),
+			"daily puzzle: backward compatible load of %s" % text)
+		check(economy.get_hints() == int(JSON.parse_string(text).get("hints", 3)), "daily puzzle: other fields load from %s" % text)
+	economy.reset_for_tests()
+	fake_today = "2026-03-01"
 
 
 func test_ads() -> void:
