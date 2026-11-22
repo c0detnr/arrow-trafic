@@ -12,7 +12,7 @@ extends Node
 ##   _backend_availability(available: bool)
 ##   _backend_products(details: Dictionary) # id -> {"price": String, "title": String}
 ##   _backend_purchase_succeeded(product_id: String, token: String)
-##   _backend_purchase_failed(product_id: String, message: String)  # "cancelled" or store text
+##   _backend_purchase_failed(product_id: String, message: String)  # "canceled", "pending" or store text
 ##   _backend_restored(purchases: Array)    # [{"product_id": String, "token": String}, ...]
 ## Failure messages emitted by IAP itself: "unavailable", "unknown_product", "already_owned", "busy".
 
@@ -33,8 +33,9 @@ const PRODUCTS := {
 		"fallback_price_try": "₺99,99", "fallback_title": "Supporter Pack"},
 }
 
-## Platform singleton the Play Billing plugin registers; fill in with the real adapter.
-const BILLING_SINGLETON := ""
+## Engine singleton registered by godot-google-play-billing 3.x.
+const BILLING_SINGLETON := "GodotGooglePlayBilling"
+const BILLING_ADAPTER := "res://services/iap_play_billing.gd"
 
 ## Active backend (see contract above). Never null after _ready().
 var backend: Object
@@ -50,12 +51,15 @@ func _ready() -> void:
 	backend.initialize(self)
 
 
+## The Play Billing adapter, only when the plugin's native singleton AND its GDScript wrapper
+## exist (Android build with the plugin installed). Elsewhere null → mock (debug) / no shop.
 func _make_native_backend() -> Object:
-	# TODO(billing adapter): when the Google Play Billing plugin is added, load it here, e.g.
-	#   if BILLING_SINGLETON != "" and Engine.has_singleton(BILLING_SINGLETON):
-	#       return load("res://services/iap_play_billing.gd").new()
-	# The adapter wraps the singleton and implements the backend contract at the top of this file.
-	return null
+	if not Engine.has_singleton(BILLING_SINGLETON):
+		return null
+	var adapter_script: Script = load(BILLING_ADAPTER)
+	if adapter_script == null or not adapter_script.is_plugin_available():
+		return null
+	return adapter_script.new()
 
 
 func _economy() -> Node:

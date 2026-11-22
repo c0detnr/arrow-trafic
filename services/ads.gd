@@ -39,8 +39,9 @@ const MIN_SECONDS_AFTER_REWARDED := 120.0
 ## Never interrupt the first minute of a session.
 const MIN_SECONDS_AFTER_APP_START := 60.0
 
-## Platform singleton the AdMob plugin registers; fill in with the real adapter.
-const ADMOB_SINGLETON := ""
+## Engine singleton registered by the Poing Studios AdMob plugin (godot-admob-plugin v5.x).
+const ADMOB_SINGLETON := "PoingGodotAdMob"
+const ADMOB_ADAPTER := "res://services/ads_admob.gd"
 
 ## Active backend (see contract above). Never null after _ready().
 var backend: Object
@@ -77,12 +78,15 @@ func _ready() -> void:
 	backend.load_interstitial()
 
 
+## The AdMob adapter, only when the plugin's native singleton AND its GDScript wrappers exist
+## (Android build with the plugin installed). Elsewhere null → mock (debug) / no ads (release).
 func _make_native_backend() -> Object:
-	# TODO(ads adapter): when the AdMob Android plugin is added, load it here, e.g.
-	#   if ADMOB_SINGLETON != "" and Engine.has_singleton(ADMOB_SINGLETON):
-	#       return load("res://services/ads_admob.gd").new()
-	# The adapter wraps the singleton and implements the backend contract at the top of this file.
-	return null
+	if not Engine.has_singleton(ADMOB_SINGLETON):
+		return null
+	var adapter_script: Script = load(ADMOB_ADAPTER)
+	if adapter_script == null or not adapter_script.is_plugin_available():
+		return null
+	return adapter_script.new()
 
 
 func _economy() -> Node:
