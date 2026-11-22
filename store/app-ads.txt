@@ -1,0 +1,2 @@
+# TEMPLATE: replace pub-0000000000000000 with your AdMob publisher ID. Best: copy the exact line from AdMob > Apps > View all apps > app-ads.txt. Host at https://<your-developer-website-domain>/app-ads.txt (domain root).
+google.com, pub-0000000000000000, DIRECT, f08c47fec0942fa0
