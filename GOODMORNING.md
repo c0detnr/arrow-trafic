@@ -1,18 +1,123 @@
-# Günaydın! ☀️ — Gece neler yapıldı, sabah ne yapman lazım
+# Günaydın! ☀️
 
-> Taslak: gece boyunca güncelleniyor. En alttaki "Durum" bölümü en günceli.
+Gece Arrow Traffic'e para kazanma sistemi ve birkaç yeni özellik eklendi. Bütün işler `monetization` dalında, ayrı commit'ler halinde duruyor. Testlerin hepsi geçiyor (`./tools/run_tests.sh`).
 
-## 0. ÖNCE BU: GitHub erişimi (push engellendi)
-Gece Claude, `c0detnr/arrow-trafic` deposuna **push yapamadı** (GitHub 403: Claude GitHub App erişimi yok).
-Tüm iş commit'li olarak bulut oturumunda duruyor: branch `monetization`
-(worktree: `/home/user/arrow-trafic/.c0detnr/monetization`).
+---
+
+## 0. ÖNCE BU (2 dk): GitHub erişimi — push yapılamadı ⚠️
+
+Claude gece `c0detnr/arrow-trafic`'e **push yapamadı**. GitHub 403 hatası verdi: Claude GitHub App bu depoya erişemiyor.
+Commit'ler kaybolmadı, bulut oturumunda duruyor. Ama oturum uzun süre boşta kalırsa silinebilir, o yüzden **ilk iş bunu yap:**
 
 1. https://claude.ai/connect-github → GitHub hesabını yeniden bağla.
-2. Claude GitHub App depoda kurulu değilse: https://github.com/apps/claude/installations/select_target → `c0detnr/arrow-trafic` seç.
-3. Bu oturuma "push et" yaz → `claude/sweet-allen-sjh6q9` dalına gönderilir.
+2. Claude GitHub App depoda kurulu değilse: https://github.com/apps/claude/installations/select_target → `c0detnr/arrow-trafic`.
+3. Bu oturuma **"push et"** yaz. Hepsi `claude/sweet-allen-sjh6q9` dalına gider, sonra PR açabilirim.
 
-## 1. Yapılanların özeti
-(sonda güncellenecek)
+---
 
-## 2. Sabah yapman gerekenler
-(sonda güncellenecek)
+## 1. Gece neler yapıldı
+
+### Para kazandıran özellikler (oyuncuyu rahatsız etmeden)
+| Özellik | Nasıl para kazandırır |
+|---|---|
+| **İpucu butonu** (ekranda, sayı rozetli) | Sıradaki doğru oku parlatır. İpucu bitince mağazayı açar. Gerçek çözücü kullanıyor: 1000 bölümün hepsinde ipucu çalışıyor, en yavaşı 0,4 ms. |
+| **Reklam izle → +1 ipucu** | Ödüllü reklam, tamamen isteğe bağlı |
+| **Cep dolunca: "Reklam izle · Geri al" / "1 ipucu ile geri al"** | Kaybetme anı en güçlü satış anı. Hep **kazanılabilir** bir konuma döndürür; kazanılabilir konum yoksa butonlar gizlenir. |
+| **Bölüm arası reklam** (çok seyrek) | İlk 8 bölümde hiç çıkmaz. En fazla 4 bölümde bir, araları en az 3 dk, ödüllü reklamdan sonraki 2 dk içinde çıkmaz, kayıptan sonra **asla** çıkmaz. Yalnızca tahta kararmış ve dokunma kilitliyken gösterilir (AdMob kuralı). |
+| **Mağaza** | `hints_10`, `hints_30`, `remove_ads` (+5 ipucu), `supporter_pack` (reklamsız + 40 ipucu) |
+| **Satın alımları geri yükle**, **Gizlilik seçenekleri** (GDPR) | Ayarlar'da |
+
+### Oyuncuyu geri getiren özellikler (daha fazla oturum = daha fazla gelir)
+- **Günlük hediye:** her gün +1 ipucu, 7. gün +3. Saati geri alıp hile yapılamıyor.
+- **Yıldızlar:** her bölümde 1–3 yıldız (hata sayısına göre). Ana ekranda toplam yıldız gösteriliyor.
+- **Bölüm seçme ekranı:** yıldızlı ızgara, 30'arlı sayfalar.
+- **Günün bulmacası:** her gün herkese aynı zor bölüm, ilk çözüşte +2 ipucu (bkz. Durum bölümü).
+- **"Bizi değerlendir":** Google'ın uygulama içi değerlendirme penceresi. Ömür boyu bir kez, 20 bölümden sonra ve 3 yıldızlı bir galibiyetin hemen ardından açılır.
+- **Titreşim / Ses** açma-kapama.
+
+### Teknik
+- Eklentiler (Poing **AdMob v5.1.0**, **Google Play Billing 3.3.0**, **In-App Review v5.3**) dinamik olarak yükleniyor. Eklentiler kurulu değilken oyun aynen çalışır: debug'da sahte reklam ve sahte mağaza, release'de reklamsız ve mağazasız.
+- Avrupa kullanıcıları için Google'ın GDPR onay formu (UMP). Onay yoksa reklam yüklenmez.
+- Satın almalar iki kez verilmez. Google'ın 3 gün içinde otomatik iade etmemesi için satın almalar onaylanıyor (acknowledge). Uygulama öne geldiğinde bekleyen satın almalar kontrol ediliyor.
+- Bir kod inceleme ajanı 7 gerçek hata buldu. Hepsi düzeltildi ve her birine test yazıldı.
+- Android izinleri eklendi (AD_ID, internet, titreşim). Sürüm **1.1.0 (kod 2)**.
+- Mağaza metinleri (TR/EN), gizlilik politikası, Play Console rehberi ve `app-ads.txt` şablonu güncellendi.
+
+### Dosya rehberi
+- `docs/PLUGIN_SETUP.md`: **eklenti kurulumu adım adım** (önce bunu oku)
+- `store/play-console.md`: Play Console'da değişecek her şey, kontrol listesi
+- `docs/monetization-research.md`: araştırma, kaynaklar, Türkiye vergi/ödeme notları
+- `services/`: economy, ads, ads_admob, ads_config, iap, iap_play_billing, review
+- `tools/run_tests.sh`: tüm testler tek komutla
+
+---
+
+## 2. Sabah yapacakların (sırayla)
+
+### A. Bilgisayarda (Arch'ta en rahatı; Windows'ta da olur)
+1. [ ] **GitHub erişimini düzelt** (yukarıdaki 0. madde) → bana "push et" de.
+2. [ ] Dalı çek ve oyunu Godot 4.7'de aç:
+   ```bash
+   git fetch origin claude/sweet-allen-sjh6q9 && git checkout claude/sweet-allen-sjh6q9
+   ```
+3. [ ] Testleri çalıştır:
+   ```bash
+   ./tools/run_tests.sh
+   ```
+4. [ ] Editörde F5 ile oyna. Debug'da reklam ve mağaza sahte, anında "başarılı" olur. Denenecekler: ipucu, kaybedip geri alma, mağaza, günlük hediye, bölüm seçme, günün bulmacası.
+5. [ ] **Eklentileri kur.** Adım adım `docs/PLUGIN_SETUP.md` A, B ve H bölümlerinde:
+   - AssetLib'den "AdMob" (Poing Studios)
+   - AssetLib'den "Godot Google Play Billing"
+   - godot-inapp-review v5.3
+   - Ardından `Project → Install Android Build Template`
+
+### B. Hesaplarda (tarayıcıda)
+6. [ ] **AdMob hesabı aç** (admob.google.com):
+   - uygulamayı ekle,
+   - 1 **ödüllü** ve 1 **geçiş (interstitial)** reklam birimi oluştur,
+   - **GDPR mesajını** yayımla.
+7. [ ] Gerçek kimlikleri koda yaz:
+   - App ID → `project.godot` → `admob/general/android/app_id`
+   - Reklam birimi id'leri → `services/ads_config.gd` → `REAL_REWARDED_ID`, `REAL_INTERSTITIAL_ID`
+
+   Yazılmazsa release build Google'ın **test** reklamlarını gösterir ve **para kazanmazsın**. Oyun açılışta bunu hata olarak loglar.
+8. [ ] **Play Console → ödeme profili / merchant hesabı** (Türkiye, TRY). Vergi kısmını (GVK 20/B, %15) bir muhasebeciye sor.
+9. [ ] Play Console'da 4 ürünü oluştur:
+
+   | Ürün | Tür | Önerilen fiyat |
+   |---|---|---|
+   | `hints_10` | tüketilebilir | ₺19,99 |
+   | `hints_30` | tüketilebilir | ₺44,99 |
+   | `remove_ads` | kalıcı | ₺49,99 |
+   | `supporter_pack` | kalıcı | ₺99,99 |
+
+   Önce 1.1.0 AAB'yi dahili teste yüklemek gerekebilir. Ayrıntılar `store/play-console.md` §6.
+10. [ ] Play Console beyanları (`store/play-console.md` §5):
+    - Reklam içerir = **Evet**
+    - Reklam Kimliği = **Evet**
+    - Veri güvenliği formu yeni cevaplarla doldurulacak
+    - IARC: uygulama içi satın alma = Evet
+11. [ ] Gizlilik politikasını (`store/privacy-policy.html`) aynı URL'de yeniden yayımla. `app-ads.txt`'yi geliştirici sitenin **kök dizinine** koy.
+
+### C. Telefonda
+12. [ ] `./tools/build_release.sh` → AAB'yi **dahili teste** yükle.
+    - Lisans test kullanıcısı ekle (Play Console → Ayarlar → Lisans testi).
+    - Cihazda kontrol et:
+      - "Test Ad" etiketli reklam görünüyor mu,
+      - test satın alma çalışıyor mu,
+      - satın alım uygulama silinip kurulunca geri yükleniyor mu.
+
+---
+
+## 3. Bilmen gerekenler / kararlar
+- Gece bu konteynerde **cihaz testi ve AAB derlemesi yapılmadı** (Android SDK yok). Reklam ve satın alma akışları gerçek eklenti kaynak koduna göre yazıldı ve sahte nesnelerle test edildi. Gerçek cihazda bir kez denemek şart.
+- Billing eklentisi Godot 4.5.1 ile derlenmiş, 4.7 için resmi test notu yok. Dahili testte dene.
+- Ödüllü reklamlar "reklamları kaldır" alındıktan sonra da **isteğe bağlı** olarak görünür. Sadece zorunlu bölüm arası reklamlar kalkar (mağaza metni de böyle yazıldı).
+- Fiyatlar öneri; Play Console'da istediğin gibi değiştir.
+- Mağaza metninde artık "reklamsız" iddiası yok, "reklamlar isteğe bağlı" deniyor.
+- `CLAUDE.md` "kullanıcı istemedikçe commit yapma" diyor. "Tam yetki" dediğin ve oturum geçici olduğu için işi kaybetmemek adına commit'ledim.
+
+---
+
+## Durum (en güncel)
+(gece boyunca güncelleniyor)
