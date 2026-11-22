@@ -12,6 +12,7 @@ func check():
 	var game = load("res://main.tscn").instantiate()
 	root.add_child(game)
 	game.start(0)
+	assert(game.retry.icon and game.retry.accessibility_name == "Yeniden başlat")
 	await process_frame
 	assert(game.tray.has_point(game.origin))
 	# Native logical viewports cover portrait phones, tablets and a wide desktop.
@@ -22,7 +23,7 @@ func check():
 			await process_frame
 			game._layout()
 			assert(game.cell > 0)
-			assert(game.tray.position.y >= 430)
+			assert(game.tray.position.y >= 375)
 			assert(game.tray.end.y < game.pocket_y - 54)
 			assert(game.retry.position.x >= game.left + 290)
 			assert(Rect2(Vector2.ZERO, Vector2(viewport_size)).encloses(game.panel.get_rect()))

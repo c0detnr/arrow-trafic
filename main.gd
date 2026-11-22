@@ -82,12 +82,12 @@ func _layout() -> void:
 	var width := minf(vs.x - 72, 680)
 	left = (vs.x - width) * 0.5
 	pocket_y = vs.y - 206
-	var area := Rect2(left + 24, 456, width - 48, pocket_y - 564)
+	var area := Rect2(left + 24, 401, width - 48, pocket_y - 509)
 	cell = minf(area.size.x / s.w, area.size.y / s.h)
 	var board := Vector2(s.w, s.h) * cell
 	origin = area.get_center() - board * 0.5
 	tray = Rect2(origin, board).grow(24)
-	retry.position = Vector2(vs.x - left - retry.size.x, 106)
+	retry.position = Vector2(vs.x - left - retry.size.x, 48)
 	veil.size = vs
 	panel.position = (vs - panel.size) * 0.5
 	for a in s.arrows:
@@ -207,26 +207,22 @@ func _draw() -> void:
 		return
 	var vs := get_viewport_rect().size
 	var width := vs.x - 2 * left
-	_text(Vector2(left, 66), "Arrow Traffic", 28, INK, -1, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text(Vector2(left, 155), "Bölüm %02d" % (idx + 1), 50, INK, -1, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_text(Vector2(left, 196), "Yolu aç. Renk sırasını tamamla.", 26, MUTED)
+	_text(Vector2(left, 112), "Bölüm %02d" % (idx + 1), 50, INK, -1, HORIZONTAL_ALIGNMENT_LEFT, true)
 
 	# The queue's first item gets a fixed slot; the preview fits the remaining width.
-	_surface(Rect2(left, 230, width, 140), SURFACE, 24)
-	_text(Vector2(left + 24, 266), "Sıradaki", 26, ACCENT)
-	_text(Vector2(left + 152, 266), "Renk sırası", 26, MUTED)
+	_text(Vector2(left, 203), "Sıradaki", 26, ACCENT)
 	var count := mini(s.queue.size(), 6)
 	var step := (width - 184) / 5.0
 	for k in count:
-		var pos := Vector2(left + 64 if k == 0 else left + 164 + (k - 1) * step, 314)
+		var pos := Vector2(left + 36 if k == 0 else left + 134 + (k - 1) * step, 259)
 		if k == 0:
 			draw_arc(pos, 34, 0, TAU, 48, ACCENT, 2, true)
 		draw_circle(pos, 26 if k == 0 else 18, COLORS[s.queue[k]], true, -1, true)
 		_mark(self, pos, 9 if k == 0 else 7, s.queue[k])
 	if s.queue.size() > count:
-		_text(Vector2(vs.x - left - 64, 320), "+%d" % (s.queue.size() - count), 26, MUTED, 44, HORIZONTAL_ALIGNMENT_RIGHT)
-	_text(Vector2(left, 410), "%d ok kaldı" % s.arrows.size(), 26, MUTED)
-	_text(Vector2(left, 410), "Hata  %d" % s.mistakes, 26, MUTED, width, HORIZONTAL_ALIGNMENT_RIGHT)
+		_text(Vector2(vs.x - left - 64, 267), "+%d" % (s.queue.size() - count), 26, MUTED, 44, HORIZONTAL_ALIGNMENT_RIGHT)
+	_text(Vector2(left, 353), "%d ok kaldı" % s.arrows.size(), 26, MUTED)
+	_text(Vector2(left, 353), "Hata  %d" % s.mistakes, 26, MUTED, width, HORIZONTAL_ALIGNMENT_RIGHT)
 
 	_surface(tray, SURFACE, 24)
 	for y in s.h:
@@ -235,19 +231,18 @@ func _draw() -> void:
 
 	_text(Vector2(left, pocket_y - 28), "Geçici cep", 26, INK)
 	_text(Vector2(left, pocket_y - 28), "%d / %d dolu" % [s.pocket.size(), s.cap], 26, ACCENT if s.pocket.size() == s.cap else MUTED, width, HORIZONTAL_ALIGNMENT_RIGHT)
-	_surface(Rect2(left, pocket_y, width, 94), SURFACE, 24)
 	for k in s.cap:
 		var pos := Vector2(left + width * (k + 0.5) / s.cap, pocket_y + 47)
-		draw_circle(pos, 29, CREAM, true, -1, true)
+		draw_arc(pos, 29, 0, TAU, 48, MUTED, 2, true)
 		if k < s.pocket.size():
 			if k == s.pocket.size() - 1:
 				pos.y -= 18 * (1.0 - landing)
 			draw_circle(pos, 25, COLORS[s.pocket[k]], true, -1, true)
 			_mark(self, pos, 9, s.pocket[k])
-		else:
-			_text(pos + Vector2(-24, 8), str(k + 1), 26, MUTED, 48, HORIZONTAL_ALIGNMENT_CENTER)
-	_text(Vector2(left, vs.y - 62), "Çıkışı açık bir oka dokun.", 26, MUTED, width, HORIZONTAL_ALIGNMENT_CENTER)
-	_text(Vector2(left, vs.y - 30), "Sırası gelmeyen renkler cepte bekler.", 24, MUTED, width, HORIZONTAL_ALIGNMENT_CENTER)
+
+	if idx == 0:
+		_text(Vector2(left, vs.y - 62), "Çıkışı açık bir oka dokun.", 26, MUTED, width, HORIZONTAL_ALIGNMENT_CENTER)
+		_text(Vector2(left, vs.y - 30), "Sırası gelmeyen renkler cepte bekler.", 24, MUTED, width, HORIZONTAL_ALIGNMENT_CENTER)
 
 
 func _button(text: String, cb: Callable) -> Button:
@@ -279,7 +274,15 @@ func _build_ui() -> void:
 	veil.color = Color(0, 0, 0, 0.72)
 	veil.z_index = 9
 	add_child(veil)
-	retry = _button("Yeniden başlat", func(): start(idx))
+	retry = _button("", func(): start(idx))
+	retry.icon = preload("res://assets/restart.svg")
+	retry.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	retry.flat = true
+	retry.custom_minimum_size = Vector2(88, 88)
+	retry.tooltip_text = "Yeniden başlat"
+	retry.accessibility_name = retry.tooltip_text
+	retry.add_theme_color_override("icon_hover_color", CREAM)
+	retry.add_theme_color_override("icon_pressed_color", CREAM)
 	add_child(retry)
 
 	panel = PanelContainer.new()
