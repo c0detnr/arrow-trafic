@@ -1,0 +1,13 @@
+[
+ {"id": 1, "w": 4, "h": 4, "pocket": 3,
+  "arrows": [{"x":2,"y":1,"dir":"left","len":2,"color":"red"},
+             {"x":1,"y":1,"dir":"up","len":2,"color":"blue"}],
+  "queue": ["blue","red"]},
+ {"id": 2, "w": 5, "h": 6, "pocket": 3,
+  "arrows": [{"x":2,"y":0,"dir":"right","len":3,"color":"green"},
+             {"x":4,"y":2,"dir":"down","len":2,"color":"red"},
+             {"x":0,"y":5,"dir":"left","len":1,"color":"yellow"},
+             {"x":2,"y":3,"dir":"up","len":2,"color":"blue"},
+             {"x":3,"y":5,"dir":"right","len":2,"color":"red"}],
+  "queue": ["blue","green","red","yellow","red"]}
+]
