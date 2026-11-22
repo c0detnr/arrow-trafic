@@ -50,6 +50,7 @@ func frames(n := 2) -> void:
 func run() -> void:
 	test_economy()
 	await test_ads()
+	await test_ads_ready_signal()
 	await test_iap()
 	economy.reset_for_tests()
 	print("test_services: ", "OK" if failures == 0 else "%d FAILED" % failures)
@@ -72,8 +73,10 @@ func test_economy() -> void:
 
 	# Daily reward and streaks.
 	check(economy.can_claim_daily(), "daily claimable for new player")
+	check(economy.next_daily_amount() == 1, "next daily for new player is 1")
 	check(economy.claim_daily() == 1 and economy.streak == 1, "first daily")
 	check(not economy.can_claim_daily() and economy.claim_daily() == 0, "same day gives 0")
+	check(economy.next_daily_amount() == 0 and economy.streak == 1, "next daily is 0 after claiming, no state change")
 	check(daily_events == [[1, 1]], "daily_claimed emitted once")
 	fake_today = "2026-03-02"
 	check(economy.claim_daily() == 1 and economy.streak == 2, "next day continues streak")
@@ -83,11 +86,21 @@ func test_economy() -> void:
 	var days := ["2026-12-27", "2026-12-28", "2026-12-29", "2026-12-30", "2026-12-31", "2027-01-01", "2027-01-02", "2027-01-03"]
 	economy.last_daily = ""
 	var amounts := []
+	var hinted := []
 	for day in days:
 		fake_today = day
+		hinted.append(economy.next_daily_amount())
 		amounts.append(economy.claim_daily())
 	check(amounts == [1, 1, 1, 1, 1, 1, 3, 1], "day 7 of each cycle gives 3: %s" % [amounts])
+	check(hinted == amounts, "next_daily_amount predicts claim_daily: %s" % [hinted])
 	check(economy.streak == 8, "streak across new year")
+	# Streak at 6 → tomorrow's claim is the 7th (3 hints); a missed day resets it to 1.
+	economy.streak = 6
+	economy.last_daily = "2027-02-10"
+	fake_today = "2027-02-11"
+	check(economy.next_daily_amount() == 3, "next daily is 3 on day 7 of the cycle")
+	fake_today = "2027-02-12"
+	check(economy.next_daily_amount() == 1 and economy.streak == 6, "gap: next daily falls back to 1")
 
 	# Stars and clears.
 	check(economy.stars_for(0) == 3 and economy.stars_for(1) == 2 and economy.stars_for(2) == 2 and economy.stars_for(3) == 1, "stars_for")
@@ -133,10 +146,11 @@ func test_economy() -> void:
 	economy.load_data()
 	check(economy.get_hints() == 3 and not economy.is_ads_removed() and economy.levels_cleared == 0, "corrupt file -> defaults")
 	f = FileAccess.open(TEST_SAVE, FileAccess.WRITE)
-	f.store_string('{"hints": "lots", "best_stars": {"x": 3, "2": 9}, "purchased": [1, "remove_ads"]}')
+	f.store_string('{"hints": "lots", "ads_removed": "yes", "best_stars": {"x": 3, "2": 9}, "purchased": [1, "remove_ads"]}')
 	f.close()
 	economy.load_data()
 	check(economy.get_hints() == 3 and economy.get_stars(2) == 3 and economy.best_stars.size() == 1, "bad fields sanitized")
+	check(not economy.is_ads_removed(), "non-bool ads_removed -> false")
 	check(economy.purchased == ["remove_ads"], "non-string ids dropped")
 	economy.reset_for_tests()
 	check(not FileAccess.file_exists(TEST_SAVE) and not FileAccess.file_exists("user://save.json"), "economy never writes save.json")
@@ -206,6 +220,42 @@ func test_ads() -> void:
 	check(reward_calls == 2, "reward granted with ads removed")
 	check(ads.can_show_privacy_options(), "mock exposes privacy options")
 	ads.request_consent()
+	economy.reset_for_tests()
+
+
+## rewarded_ready_changed follows every change of is_rewarded_ready() (mock backend).
+func test_ads_ready_signal() -> void:
+	var ready_events: Array = []
+	var record := func(ready: bool) -> void: ready_events.append(ready)
+	ads.rewarded_ready_changed.connect(record)
+	economy.set_ads_removed(false)
+	fake_now += 100000.0
+	ads.reset_for_tests()
+	fake_now += 1000.0
+	var shown := false
+	for i in 4:
+		shown = ads.on_level_cleared(100 + i)
+	check(shown, "interstitial shown for ready-signal test")
+	check(ready_events == [false] and not ads.is_rewarded_ready(), "interstitial start emits ready=false: %s" % [ready_events])
+	await frames()
+	check(ready_events.back() == true and ads.is_rewarded_ready(), "interstitial close emits ready=true: %s" % [ready_events])
+
+	ready_events.clear()
+	check(ads.show_rewarded("hint", func() -> void: pass), "rewarded shows")
+	check(ready_events == [false], "rewarded start emits ready=false")
+	await frames()
+	check(ready_events.back() == true and ads.is_rewarded_ready(), "rewarded close emits ready=true: %s" % [ready_events])
+
+	# A rewarded load result arriving under an interstitial must not report ready.
+	ready_events.clear()
+	fake_now += 1000.0
+	for i in 4:
+		ads.on_level_cleared(200 + i)
+	ads._backend_rewarded_loaded(true)
+	check(ready_events == [false, false], "load during interstitial reports not ready: %s" % [ready_events])
+	await frames()
+	check(ready_events.back() == true, "ready again after interstitial")
+	ads.rewarded_ready_changed.disconnect(record)
 	economy.reset_for_tests()
 
 

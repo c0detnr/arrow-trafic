@@ -1,9 +1,9 @@
-# Eklenti Kurulumu — AdMob + Google Play Billing
+# Eklenti Kurulumu — AdMob + Google Play Billing + In-App Review
 
-> Kod hazır: `services/ads_admob.gd`, `services/iap_play_billing.gd`, `services/ads_config.gd`.
+> Kod hazır: `services/ads_admob.gd`, `services/iap_play_billing.gd`, `services/ads_config.gd`, `services/review.gd`.
 > Eklentiler kurulu değilken oyun aynen çalışır (debug: mock reklam/mağaza, release: reklamsız/mağazasız).
 > Adaptörler yalnızca Android'de eklentinin singleton'ı **ve** GDScript dosyaları varsa devreye girer
-> (`PoingGodotAdMob`, `GodotGooglePlayBilling`). Eklentilerin `class_name`'lerine statik referans yok.
+> (`PoingGodotAdMob`, `GodotGooglePlayBilling`, `InappReviewPlugin`). Eklentilerin `class_name`'lerine statik referans yok.
 
 ## A. AdMob — Poing Studios `godot-admob-plugin` v5.1.0
 
@@ -102,3 +102,35 @@ doğrulama 24 saate kadar sürer. Site yoksa GitHub Pages / Firebase Hosting ile
 App content → **Ads: Yes**, **Advertising ID: Yes** (Advertising, Analytics, Fraud prevention),
 **Data safety** güncelle (yaklaşık konum, uygulama etkileşimleri, tanılama, cihaz kimlikleri — "shared"),
 gizlilik politikasına AdMob/UMP/reklam kimliği ekle. Ayrıntı: `docs/monetization-research.md` §3.
+
+## H. In-App Review — `godot-sdk-integrations/godot-inapp-review` v5.3
+
+Kod: `services/review.gd` (autoload `Review`). Oyun tarafı: bir galibiyetten sonra
+`Review.maybe_request(toplam_temizlenen, son_yildiz)` çağrılır. Değerlendirme akışı **ömür boyu en fazla bir kez**
+istenir (`user://review.json`), yalnızca şu koşulların hepsi sağlanınca:
+toplam ≥ 20 farklı seviye temizlenmiş, son seviye **3 yıldız**, son 60 sn içinde interstitial gösterilmemiş
+(`Ads.last_interstitial_time`). Eklenti yoksa: debug build sadece "requested" işaretler ve log basar
+(`Review (debug): ...`), release build hiçbir şey yapmaz ve hiçbir şey kaydetmez.
+
+1. AssetLib → `In-app Review` (yazar **Cengiz**, Android girdisi) → Download → Install, proje köküne,
+   **"Ignore asset root" İŞARETLİ** (eklentinin kendi talimatı). Manuel yol: GitHub Releases `v5.3` →
+   Android zip'ini proje köküne aç.
+   Kontrol: şu dosyalar var olmalı (adaptör bu yolları kullanır, kaynak koddan doğrulandı):
+   - `res://addons/InappReviewPlugin/InappReview.gd` (`class_name InappReview`, Node)
+   - `res://addons/GMPShared/GmpLogger.gd` (wrapper'ın bağımlılığı)
+   - `res://addons/InappReviewPlugin/bin/debug|release/InappReviewPlugin-*.aar`
+2. `Project Settings → Plugins` → **InappReview**'i etkinleştir (export eklentisi AAR'ı ve
+   `com.google.android.play:review` bağımlılığını ekler). Gradle build zaten açık (bkz. C.1).
+3. Sahneye `InappReview` node'u **ekleme**: `Review` autoload'ı, `InappReviewPlugin` singleton'ı varsa
+   wrapper'ı kendisi oluşturur. Akış: `generate_review_info()` → `review_info_generated` sinyali →
+   `launch_review_flow()` → `review_flow_launched` (başarısızlıkta `review_info_generation_failed` /
+   `review_flow_launch_failed`; sessizce yutulur, tekrar denenmez).
+4. Ek izin veya Play Console ayarı gerekmez. Ancak:
+   - Akış yalnızca **Play Store'dan kurulmuş** build'de çalışır (internal testing / internal app sharing).
+     `adb install` ile kurulan APK'da kart çıkmaz.
+   - Google **kota** uygular: kart hiç görünmeyebilir ve oyun bunu öğrenemez (`review_flow_launched` yine gelir).
+     Bu normaldir; oyun bu yüzden "Bizi değerlendir" gibi bir şey göstermez/ödül vermez (Play politikası da
+     değerlendirme karşılığı ödülü yasaklar).
+   - Test için: internal testing'deki tester hesabıyla kur; hesap daha önce uygulamayı değerlendirdiyse kart çıkmaz.
+     Tekrar denemek için uygulama verisini sil (`user://review.json` sıfırlanır) — Google kotası yine geçerli olabilir.
+5. `adb logcat | grep -E "Review|godot"` ile `Review: review info generation failed` gibi uyarıları izle.

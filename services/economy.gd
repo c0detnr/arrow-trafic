@@ -59,7 +59,7 @@ func load_data() -> void:
 		push_warning("Economy: unreadable %s, using defaults" % save_path)
 		return
 	hints = maxi(0, int(_num(data.get("hints"), STARTING_HINTS)))
-	ads_removed = data.get("ads_removed") == true
+	ads_removed = data.get("ads_removed") is bool and data.get("ads_removed")
 	last_daily = str(data.get("last_daily", "")) if data.get("last_daily") is String else ""
 	streak = maxi(0, int(_num(data.get("streak"), 0)))
 	levels_cleared = maxi(0, int(_num(data.get("levels_cleared"), 0)))
@@ -140,14 +140,31 @@ func can_claim_daily() -> bool:
 	return last_daily != _today()
 
 
+## Hints the next claim_daily() would grant right now (0 if already claimed today).
+## For UI hints such as "Tomorrow: +3"; does not change any state.
+func next_daily_amount() -> int:
+	var today := _today()
+	if last_daily == today:
+		return 0
+	return _daily_amount(_next_streak(today))
+
+
+func _next_streak(today: String) -> int:
+	return streak + 1 if _is_day_before(last_daily, today) else 1
+
+
+func _daily_amount(for_streak: int) -> int:
+	return DAILY_CYCLE_HINTS if for_streak % DAILY_CYCLE == 0 else DAILY_HINTS
+
+
 ## Returns hints granted (0 if already claimed today).
 func claim_daily() -> int:
 	var today := _today()
 	if last_daily == today:
 		return 0
-	streak = streak + 1 if _is_day_before(last_daily, today) else 1
+	streak = _next_streak(today)
 	last_daily = today
-	var amount := DAILY_CYCLE_HINTS if streak % DAILY_CYCLE == 0 else DAILY_HINTS
+	var amount := _daily_amount(streak)
 	hints += amount
 	save_data()
 	hints_changed.emit(hints)

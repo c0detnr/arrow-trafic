@@ -28,6 +28,7 @@ general/android/app_id="ca-app-pub-3940256099942544~3347511713"
 Economy="*res://services/economy.gd"
 Ads="*res://services/ads.gd"
 IAP="*res://services/iap.gd"
+Review="*res://services/review.gd"
 
 [display]
 

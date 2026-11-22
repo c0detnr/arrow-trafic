@@ -19,6 +19,8 @@ extends Node
 ##   _backend_rewarded_closed()             # rewarded ad dismissed (always, earned or not)
 ##   _backend_interstitial_closed()         # interstitial dismissed or failed to show
 
+## Emitted whenever is_rewarded_ready() may have changed: a rewarded ad loaded or failed, a
+## rewarded or interstitial ad started showing (false) or closed. May repeat the same value.
 signal rewarded_ready_changed(ready: bool)
 signal rewarded_finished(placement: String, rewarded: bool)
 signal interstitial_closed()
@@ -153,6 +155,7 @@ func _backend_rewarded_closed() -> void:
 	last_rewarded_time = clock.call()
 	rewarded_finished.emit(_placement, _earned)
 	backend.load_rewarded()
+	rewarded_ready_changed.emit(is_rewarded_ready())
 
 
 # --- Interstitial ---
@@ -183,6 +186,7 @@ func on_level_cleared(total_cleared: int) -> bool:
 	_interstitial_showing = true
 	_wins_since_interstitial = 0
 	last_interstitial_time = now
+	rewarded_ready_changed.emit(false)   # rewarded buttons must not be usable under an interstitial
 	backend.show_interstitial()
 	return true
 
@@ -193,6 +197,7 @@ func _backend_interstitial_closed() -> void:
 	_interstitial_showing = false
 	interstitial_closed.emit()
 	backend.load_interstitial()
+	rewarded_ready_changed.emit(is_rewarded_ready())
 
 
 # --- Consent / privacy ---
