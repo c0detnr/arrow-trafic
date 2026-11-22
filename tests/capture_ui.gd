@@ -3,6 +3,7 @@ extends SceneTree
 # XDG_DATA_HOME=$(mktemp -d) godot --path . --script tests/capture_ui.gd -- <output.png> <width> <height> <level> <state> <theme> [taps]
 # States: playing, mid, won, home, settings, shop, daily (gift claimed + toast), hint (highlighted hint), lost (revive panel),
 # levels (level select; every level before <level> is cleared with 0-3 mistakes so tiles show stars).
+# hint is captured near the top of the halo pulse so the highlighted arrow reads clearly.
 func _initialize() -> void:
 	if FileAccess.file_exists("user://save.json"):
 		printerr("Use an empty XDG_DATA_HOME for captures.")
@@ -86,6 +87,9 @@ func capture() -> void:
 		assert(game.celebration >= 0.33 and game.celebration < 1.0)
 	else:
 		await create_timer(0.6).timeout
+	if state == "hint":  # catch the halo near the top of its pulse (main.gd: sin(ticks * 0.005))
+		while sin(Time.get_ticks_msec() * 0.005) < 0.85:
+			await process_frame
 	await RenderingServer.frame_post_draw
 	var error := viewport.get_texture().get_image().save_png(args[0])
 	assert(error == OK)
