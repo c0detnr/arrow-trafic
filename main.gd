@@ -77,6 +77,7 @@ const ENGLISH_TEXT := {
 	"Bölüm %d, kilitli": "Level %d, locked",
 	"Bölüm %d, %d yıldız": "Level %d, %d stars",
 	"Toplam yıldız: %d": "Total stars: %d",
+	"Ödeme bekleniyor — onaylanınca ipuçların eklenecek": "Payment pending — you'll get it once it's confirmed",
 	"Titreşim: Açık": "Vibration: On",
 	"Titreşim: Kapalı": "Vibration: Off",
 	"Ses: Açık": "Sound: On",
@@ -217,6 +218,12 @@ var levels_prev: Button
 var levels_next: Button
 var levels_page_label: Label
 var levels_page := 0
+## Index in `history` the loss panel would revive to (newest winnable snapshot), or -1.
+var revive_target := -1
+## Whether this win's interstitial was shown (then no review prompt).
+var win_ad_shown := false
+## Longest the win transition waits for an interstitial to close; the game never stays locked.
+var interstitial_timeout := 90.0
 
 
 func _ready() -> void:
@@ -317,6 +324,7 @@ func start(i: int, entering := false) -> void:
 	_save()
 	s = Logic.new_state(levels[idx])
 	history.clear()
+	revive_target = -1
 	blocked_streak = 0
 	win_stars = 0
 	if mascot_tween:
@@ -539,6 +547,12 @@ func _celebrate_win(t: Tween) -> void:
 	t.tween_method(_show_celebration, 0.0, 1.0, 0.9)
 	t.tween_property(board_layer, "modulate:a", 0.0, 0.3)
 	t.parallel().tween_method(_move_board, 0.0, -18.0, 0.3).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	# Interstitial (Ads applies its own pacing) only while the board is gone and input is locked.
+	win_ad_shown = false
+	t.tween_callback(func():
+		win_ad_shown = Ads.on_level_cleared(Economy.levels_cleared)
+		if win_ad_shown:
+			_hold_for_interstitial(t))
 	t.tween_callback(func(): start((idx + 1) % levels.size(), true))
 	t.tween_property(board_layer, "modulate:a", 1.0, 0.35)
 	t.parallel().tween_method(_move_board, 18.0, 0.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
@@ -547,9 +561,22 @@ func _celebrate_win(t: Tween) -> void:
 		retry.disabled = false
 		win_tween = null
 		_refresh_hint_button()
-		# Wins only: Ads applies its own pacing and usually shows nothing.
-		if not Ads.on_level_cleared(Economy.levels_cleared):
+		if not win_ad_shown:
 			_maybe_request_review(stars))
+
+
+## Pauses the win transition until the interstitial closes (or the safety timeout passes).
+func _hold_for_interstitial(t: Tween) -> void:
+	t.pause()
+	var resume := func():
+		# start() kills the tween if the player left meanwhile; a finished tween is invalid too.
+		if t.is_valid() and not t.is_running():
+			t.play()
+	Ads.interstitial_closed.connect(resume, CONNECT_ONE_SHOT)
+	get_tree().create_timer(interstitial_timeout).timeout.connect(func():
+		if Ads.interstitial_closed.is_connected(resume):
+			Ads.interstitial_closed.disconnect(resume)
+		resume.call())
 
 
 ## Asks the optional Review service (never alongside an interstitial); it applies its own pacing.
@@ -1250,13 +1277,22 @@ func _show_loss_panel() -> void:
 	panel.visible = true
 	veil.visible = true
 	retry.disabled = true
+	revive_target = _winnable_snapshot()
 	_refresh_loss_panel()
+
+
+## Newest snapshot in `history` that can still be won (solved on a copy), or -1.
+func _winnable_snapshot() -> int:
+	for k in range(history.size() - 1, -1, -1):
+		if Logic.hint(Logic.snapshot(history[k])) >= 0:
+			return k
+	return -1
 
 
 func _refresh_loss_panel() -> void:
 	if not panel or s.is_empty():
 		return
-	var can_undo: bool = s.status == "lost" and not history.is_empty()
+	var can_undo: bool = s.status == "lost" and revive_target >= 0 and revive_target < history.size()
 	revive_ad_button.visible = can_undo and Ads.is_rewarded_ready()
 	revive_hint_button.visible = can_undo and Economy.get_hints() > 0
 	# Replay is the main action only when there is nothing gentler to offer.
@@ -1269,19 +1305,21 @@ func _refresh_loss_panel() -> void:
 
 
 func _on_revive_ad() -> void:
-	if s.status == "lost" and not history.is_empty():
+	if s.status == "lost" and revive_target >= 0:
 		Ads.show_rewarded(Ads.PLACEMENT_REVIVE, _revive)
 
 
 func _on_revive_hint() -> void:
-	if s.status == "lost" and not history.is_empty() and Economy.spend_hint():
+	if s.status == "lost" and revive_target >= 0 and Economy.spend_hint():
 		_revive()
 
 
-## Steps back to the state before the losing move without restarting the level.
+## Steps back to the newest winnable state before the loss (dropping newer, dead-end snapshots).
 func _revive() -> void:
-	if s.is_empty() or s.status != "lost" or history.is_empty():
+	if s.is_empty() or s.status != "lost" or revive_target < 0 or revive_target >= history.size():
 		return
+	history.resize(revive_target + 1)
+	revive_target = -1
 	Logic.restore(s, history.pop_back())
 	blocked_streak = 0
 	_rebuild_board()
@@ -1327,9 +1365,15 @@ func _on_purchase_completed(_product_id: String) -> void:
 
 func _on_purchase_failed(_product_id: String, message: String) -> void:
 	_refresh_wallet()
-	if message.to_lower() in ["canceled", "cancelled", "user_canceled", "user_cancelled"]:
+	var reason := message.to_lower()
+	if reason in ["canceled", "cancelled", "user_canceled", "user_cancelled"]:
 		return
-	_toast(_localized("Satın alma tamamlanmadı"))
+	if reason == "pending":
+		_toast(_localized("Ödeme bekleniyor — onaylanınca ipuçların eklenecek"))
+	elif reason == "unavailable":
+		_toast(_localized("Mağaza şu an kullanılamıyor"))
+	else:
+		_toast(_localized("Satın alma tamamlanmadı"))
 
 
 func _restore_purchases() -> void:

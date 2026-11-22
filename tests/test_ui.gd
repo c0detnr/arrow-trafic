@@ -276,6 +276,9 @@ func run():
 	await monetization(game, economy, ads)
 	await level_select(game, economy)
 	await settings_toggles(game)
+	await interstitial_timing(game, economy, ads)
+	await revive_to_winnable(game)
+	purchase_messages(game)
 	game.queue_free()
 	await process_frame
 	var english = load("res://main.tscn").instantiate()
@@ -298,7 +301,7 @@ func run():
 		printerr("test_ui: %d check(s) failed" % failures)
 		quit(1)
 		return
-	print("test_ui: OK (all levels, four viewports, win/loss/retry, theme, save, mascot, locale, back, hints, revive, shop, daily, level select, toggles, review hook)")
+	print("test_ui: OK (all levels, four viewports, win/loss/retry, theme, save, mascot, locale, back, hints, revive, shop, daily, level select, toggles, review hook, interstitial timing, winnable revive, pending purchase)")
 	create_timer(1.0).timeout.connect(func():
 		printerr("Android back on Home did not quit.")
 		quit(1))
@@ -588,3 +591,180 @@ func settings_toggles(game) -> void:
 	game.start(0)
 	game._show_home(true)
 	await frames(1)
+
+
+## Puts a review spy at /root/Review; returns [spy, real Review or null] for _remove_review_spy.
+func _install_review_spy() -> Array:
+	var real: Node = root.get_node_or_null("Review")
+	if real:
+		root.remove_child(real)
+	var spy := Node.new()
+	spy.name = "Review"
+	spy.set_script(_review_spy_script())
+	root.add_child(spy)
+	return [spy, real]
+
+
+func _remove_review_spy(pair: Array) -> void:
+	root.remove_child(pair[0])
+	pair[0].free()
+	if pair[1]:
+		root.add_child(pair[1])
+
+
+## Ads backend whose interstitial stays open until the test closes it.
+func _held_interstitial_backend() -> Object:
+	var script := GDScript.new()
+	script.source_code = """extends RefCounted
+var shown_interstitials := 0
+func initialize(_target: Object) -> void: pass
+func is_rewarded_loaded() -> bool: return true
+func load_rewarded() -> void: pass
+func show_rewarded(_placement: String) -> void: pass
+func is_interstitial_loaded() -> bool: return true
+func load_interstitial() -> void: pass
+func show_interstitial() -> void: shown_interstitials += 1
+func request_consent() -> void: pass
+func can_show_privacy_options() -> bool: return false
+func show_privacy_options() -> void: pass
+"""
+	script.reload()
+	return script.new()
+
+
+func _win_current(game) -> void:
+	while game.s.status == "playing":
+		var moved := false
+		for i in game.s.arrows.size():
+			if game.Logic.can_exit(game.s, i):
+				game._tap(center_of(game, i))
+				moved = true
+				break
+		if not moved:
+			break
+
+
+## Makes the next on_level_cleared() pass Ads' pacing rules (public API only).
+func _arm_interstitial(ads: Node, economy: Node, now: Dictionary) -> void:
+	now.t += 1000.0
+	for k in ads.INTERSTITIAL_EVERY_CLEARS - 1:
+		ads.on_level_cleared(0)  # below the first-clears threshold: only counts the win
+	var k := 500
+	while economy.levels_cleared < ads.FIRST_INTERSTITIAL_AFTER_CLEARS:
+		economy.record_clear(k, 0)
+		k += 1
+
+
+func interstitial_timing(game, economy: Node, ads: Node) -> void:
+	var proto = JSON.parse_string(FileAccess.get_file_as_string("res://levels/proto.json"))
+	game.levels = proto
+	var real_backend: Object = ads.backend
+	var fake := _held_interstitial_backend()
+	var now := {"t": 0.0}
+	ads.clock = func() -> float: return now.t
+	ads.reset_for_tests()
+	ads.backend = fake
+	var ads_removed: bool = economy.is_ads_removed()
+	economy.set_ads_removed(false)  # the shop test bought "remove ads"
+	var review := _install_review_spy()
+	# The interstitial opens only after the board has faded out, before the next level starts.
+	_arm_interstitial(ads, economy, now)
+	game.start(0)
+	game._show_home(false)
+	_win_current(game)
+	check(game.s.status == "won")
+	var tween: Tween = game.win_tween
+	var guard := 0
+	while fake.shown_interstitials == 0 and game.idx == 0 and guard < 600:
+		await process_frame
+		guard += 1
+	check(fake.shown_interstitials == 1, "interstitial shown")
+	check(game.idx == 0 and game.input_locked and game.retry.disabled, "next level waits for the ad")
+	check(is_zero_approx(game.board_layer.modulate.a), "board is faded out under the ad")
+	check(tween.is_valid() and not tween.is_running(), "transition paused")
+	await create_timer(0.3).timeout
+	check(game.idx == 0 and game.input_locked, "still waiting while the ad is open")
+	ads._backend_interstitial_closed()
+	await tween.finished
+	check(game.idx == 1 and not game.input_locked and not game.retry.disabled)
+	check(review[0].calls.is_empty(), "no review prompt after an interstitial")
+	# Safety timeout: a close that never arrives cannot keep the game locked.
+	game.interstitial_timeout = 0.25
+	_arm_interstitial(ads, economy, now)
+	game.start(0)
+	_win_current(game)
+	tween = game.win_tween
+	guard = 0
+	while fake.shown_interstitials == 1 and game.idx == 0 and guard < 600:
+		await process_frame
+		guard += 1
+	check(fake.shown_interstitials == 2 and game.idx == 0 and game.input_locked)
+	await tween.finished
+	check(game.idx == 1 and not game.input_locked, "timeout released the transition")
+	check(review[0].calls.is_empty())
+	ads._backend_interstitial_closed()  # the late close changes nothing
+	await process_frame
+	check(game.idx == 1 and not game.input_locked)
+	_remove_review_spy(review)
+	ads.backend = real_backend
+	economy.set_ads_removed(ads_removed)
+	ads.clock = func() -> float: return 0.0
+	ads.reset_for_tests()
+	game.interstitial_timeout = 90.0
+	game.start(0)
+	game._show_home(true)
+
+
+func revive_to_winnable(game) -> void:
+	game.levels = JSON.parse_string(FileAccess.get_file_as_string("res://levels/proto.json"))
+	game.start(0)
+	game._show_home(false)
+	var winnable: Dictionary = game.Logic.snapshot(game.s)
+	var dead: Dictionary = game.Logic.snapshot(game.s)
+	var used := {}
+	for a in dead.arrows:
+		used[a.color] = true
+	for colour in game.palette.arrows:
+		if not used.has(colour):
+			dead.queue.push_front(colour)
+			break
+	dead.cap = 0
+	check(game.Logic.hint(dead.duplicate(true)) == -1, "dead snapshot is unwinnable")
+	# Newest snapshot is a dead end: revive skips it and drops it.
+	game.history = [winnable.duplicate(true), dead.duplicate(true)]
+	game.s.status = "lost"
+	game._show_loss_panel()
+	check(game.revive_target == 0 and game.revive_ad_button.visible)
+	check(game.history[0] == winnable and game.history[1] == dead, "solver works on copies")
+	game.revive_ad_button.pressed.emit()
+	await frames()
+	check(game.s == winnable and game.history.is_empty() and not game.panel.visible)
+	# Nothing winnable: only replay is offered, and a stray revive does nothing.
+	game.history = [dead.duplicate(true), dead.duplicate(true)]
+	game.s.status = "lost"
+	game._show_loss_panel()
+	check(game.revive_target == -1 and not game.revive_ad_button.visible and not game.revive_hint_button.visible)
+	check(game.panel_retry.visible)
+	game.revive_ad_button.pressed.emit()
+	game.revive_hint_button.pressed.emit()
+	await frames()
+	check(game.s.status == "lost" and game.panel.visible)
+	game.panel_retry.pressed.emit()
+	check(game.s.status == "playing" and not game.panel.visible)
+	game.start(0)
+	game._show_home(true)
+
+
+func purchase_messages(game) -> void:
+	var iap: Node = root.get_node("IAP")
+	var screen := Rect2(Vector2.ZERO, Vector2(root.size))
+	iap.purchase_failed.emit("hints_10", "pending")
+	check(game.toast_label.text == "Ödeme bekleniyor — onaylanınca ipuçların eklenecek")
+	check(screen.encloses(game.toast.get_rect()))
+	iap.purchase_failed.emit("hints_10", "unavailable")
+	check(game.toast_label.text == "Mağaza şu an kullanılamıyor")
+	game.toast_label.text = ""
+	iap.purchase_failed.emit("hints_10", "canceled")
+	check(game.toast_label.text == "")
+	iap.purchase_failed.emit("hints_10", "BILLING_ERROR")
+	check(game.toast_label.text == "Satın alma tamamlanmadı")
