@@ -15,7 +15,7 @@ const TEST_INTERSTITIAL_ID := "ca-app-pub-3940256099942544/1033173712"
 # alanına yazılır (eklenti manifest'e o değeri koyar). Burada yalnızca kayıt amaçlı tutulur.
 const REAL_APP_ID := "ca-app-pub-6169304823027068~2885705018"
 ## Rewarded ad unit ("/" içerir), ör. ca-app-pub-XXXXXXXXXXXXXXXX/NNNNNNNNNN
-const REAL_REWARDED_ID := "ca-app-pub-6169304823027068/6712561548"
+const REAL_REWARDED_ID := "ca-app-pub-6169304823027068/1432314704"
 ## Interstitial ad unit ("/" içerir).
 const REAL_INTERSTITIAL_ID := "ca-app-pub-6169304823027068/1384921083"
 
