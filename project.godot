@@ -21,7 +21,7 @@ config/icon="res://assets/icon.svg"
 [admob]
 
 general/android/enabled=true
-general/android/app_id="ca-app-pub-3940256099942544~3347511713"
+general/android/app_id="ca-app-pub-6169304823027068~2885705018"
 
 [autoload]
 

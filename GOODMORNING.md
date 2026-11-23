@@ -70,7 +70,7 @@ Tüm commit'ler `claude/sweet-allen-sjh6q9` dalına push edildi.
    - uygulamayı ekle,
    - 1 **ödüllü** ve 1 **geçiş (interstitial)** reklam birimi oluştur,
    - **GDPR mesajını** yayımla.
-7. [ ] Gerçek kimlikleri koda yaz:
+7. [x] Gerçek kimlikler koda yazıldı ✅ (App ID, ödüllü ve geçiş birimleri, app-ads.txt):
    - App ID → `project.godot` → `admob/general/android/app_id`
    - Reklam birimi id'leri → `services/ads_config.gd` → `REAL_REWARDED_ID`, `REAL_INTERSTITIAL_ID`
 

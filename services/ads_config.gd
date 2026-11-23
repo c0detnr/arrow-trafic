@@ -10,14 +10,14 @@ const TEST_APP_ID := "ca-app-pub-3940256099942544~3347511713"
 const TEST_REWARDED_ID := "ca-app-pub-3940256099942544/5224354917"
 const TEST_INTERSTITIAL_ID := "ca-app-pub-3940256099942544/1033173712"
 
-# TODO(sabah): AdMob konsolunda uygulamayı ve iki reklam birimini oluşturup gerçek id'leri yaz.
+# Gerçek AdMob kimlikleri (Arrow Traffic). Debug build her zaman Google test id'lerini kullanır.
 # App id ("~" içerir) BURADA kullanılmaz; Project Settings → admob/general/android/app_id
 # alanına yazılır (eklenti manifest'e o değeri koyar). Burada yalnızca kayıt amaçlı tutulur.
-const REAL_APP_ID := ""
+const REAL_APP_ID := "ca-app-pub-6169304823027068~2885705018"
 ## Rewarded ad unit ("/" içerir), ör. ca-app-pub-XXXXXXXXXXXXXXXX/NNNNNNNNNN
-const REAL_REWARDED_ID := ""
+const REAL_REWARDED_ID := "ca-app-pub-6169304823027068/6712561548"
 ## Interstitial ad unit ("/" içerir).
-const REAL_INTERSTITIAL_ID := ""
+const REAL_INTERSTITIAL_ID := "ca-app-pub-6169304823027068/1384921083"
 
 ## RequestConfiguration.max_ad_content_rating: "G", "PG", "T", "MA" or "" (unspecified).
 const MAX_AD_CONTENT_RATING := "PG"
