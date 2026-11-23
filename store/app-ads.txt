@@ -1,0 +1,2 @@
+# Host at https://<your-developer-website-domain>/app-ads.txt (domain root). Verify against AdMob > Apps > app-ads.txt.
+google.com, pub-6169304823027068, DIRECT, f08c47fec0942fa0
