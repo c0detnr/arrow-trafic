@@ -120,7 +120,7 @@ Commit'ler kaybolmadı, bulut oturumunda duruyor. Ama oturum uzun süre boşta k
 ---
 
 ## Durum (en güncel — 23 Kasım sabah)
-- ✅ Tüm özellikler bitti, **21 commit**, `./tools/run_tests.sh` → 6/6 ok.
+- ✅ Tüm özellikler bitti, **19 commit**, `./tools/run_tests.sh` → 6/6 ok.
 - ✅ İki kod incelemesinde bulunan hatalar düzeltildi. Her biri regresyon testli.
   Testlerin işe yaradığı da kontrol edildi: düzeltme geri alınınca testler kırılıyor.
 - ✅ Mağaza ekran görüntüleri (TR/EN, telefon/tablet/katlanabilir) ve öne çıkan görseller yeni arayüzle yeniden üretildi → Play Console'a yeniden yükle.
