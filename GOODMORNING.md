@@ -4,14 +4,8 @@ Gece Arrow Traffic'e para kazanma sistemi ve birkaç yeni özellik eklendi. Büt
 
 ---
 
-## 0. ÖNCE BU (2 dk): GitHub erişimi — push yapılamadı ⚠️
-
-Claude gece `c0detnr/arrow-trafic`'e **push yapamadı**. GitHub 403 hatası verdi: Claude GitHub App bu depoya erişemiyor.
-Commit'ler kaybolmadı, bulut oturumunda duruyor. Ama oturum uzun süre boşta kalırsa silinebilir, o yüzden **ilk iş bunu yap:**
-
-1. https://claude.ai/connect-github → GitHub hesabını yeniden bağla.
-2. Claude GitHub App depoda kurulu değilse: https://github.com/apps/claude/installations/select_target → `c0detnr/arrow-trafic`.
-3. Bu oturuma **"push et"** yaz. Hepsi `claude/sweet-allen-sjh6q9` dalına gider, sonra PR açabilirim.
+## 0. GitHub ✅
+Tüm commit'ler `claude/sweet-allen-sjh6q9` dalına push edildi.
 
 ---
 
@@ -124,7 +118,7 @@ Commit'ler kaybolmadı, bulut oturumunda duruyor. Ama oturum uzun süre boşta k
 - ✅ İki kod incelemesinde bulunan hatalar düzeltildi. Her biri regresyon testli.
   Testlerin işe yaradığı da kontrol edildi: düzeltme geri alınınca testler kırılıyor.
 - ✅ Mağaza ekran görüntüleri (TR/EN, telefon/tablet/katlanabilir) ve öne çıkan görseller yeni arayüzle yeniden üretildi → Play Console'a yeniden yükle.
-- ⚠️ **Push yapılamadı** (GitHub 403) → 0. maddeyi yap, sonra bana "push et" de.
+- ✅ Push edildi: `claude/sweet-allen-sjh6q9`.
 - ⚠️ **Android APK derlemesi doğrulanmadı.** Deneme yarıda durduruldu. Kesin olan tek şey: AdMob eklentisinin 13 GDScript dosyası Godot 4.7'de sorunsuz yükleniyor.
   İlk dahili test derlemesinde Gradle "minSdk" hatası verirse `export_presets.cfg` → `gradle_build/min_sdk="24"` yap.
 - Bilinçli olarak yapılmayanlar (küçük):
