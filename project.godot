@@ -33,3 +33,7 @@ renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.059, 0.059, 0.059, 1)
 
 textures/vram_compression/import_etc2_astc=true
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/android_manifest_fix/plugin.cfg")
