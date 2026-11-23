@@ -49,7 +49,7 @@ Tüm commit'ler `claude/sweet-allen-sjh6q9` dalına push edildi.
 ## 2. Sabah yapacakların (sırayla)
 
 ### A. Bilgisayarda (Arch'ta en rahatı; Windows'ta da olur)
-1. [ ] **GitHub erişimini düzelt** (yukarıdaki 0. madde) → bana "push et" de.
+1. [x] GitHub erişimi — push edildi ✅
 2. [ ] Dalı çek ve oyunu Godot 4.7'de aç:
    ```bash
    git fetch origin claude/sweet-allen-sjh6q9 && git checkout claude/sweet-allen-sjh6q9
