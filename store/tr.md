@@ -29,7 +29,8 @@ NEDEN SEVECEKSİN
 • İnternetsiz oyun: uçakta, metroda, her yerde çevrimdışı oyna
 • İpuçları: başlangıçta 3 ücretsiz, her gün hediye ipucu, 7. günde 3 ipucu, her 10 yeni bölümde 1 bonus
 • Kaybettiğinde son hamleyi geri alma (ipucuyla veya reklam izleyerek)
-• Her bölümde hatalarına göre 1–3 yıldız, ana ekranda toplam yıldızın
+• Her bölümde hatalarına göre 1–3 yıldız; bölüm seçme ekranında yıldızlarını gör, istediğin bölümü yeniden oyna
+• Günün bulmacası: her gün yeni bir zorlu bölüm, ilk çözüşte +2 ipucu
 • Tek parmakla dikey oynanış
 • Göz yormayan koyu tema ve açık tema
 • Renk körlüğüne uygun: her renk ayrıca bir simgeyle işaretli
@@ -48,17 +49,18 @@ KİMLER İÇİN
 Okları doğru sırayla çıkar, cebi taşırma, tahtayı temizle. Arrow Traffic'i şimdi indir ve ilk bölümü dene!
 
 # Ekran görüntüsü başlıkları (ekranlarda kullanıldı)
-1. Okları doğru sırayla çıkar
+1. İpucu doğru oku gösterir
 2. Sıradaki renk kapıdan geçer
-3. Cep dolmasın, ileriyi düşün
-4. 1000 bölüm, internetsiz
+3. 1000 bölüm, 3 yıldız topla
+4. İnternetsiz, kendi hızında
 5. Koyu ve açık tema
 
 # Yayın notları (500)
 1.1.0 yenilikleri:
 • İpuçları: 3 ücretsiz ipucu, günlük hediye ve 7. gün bonusu, her 10 yeni bölümde 1 ipucu
 • Cep taşınca son hamleyi geri al (ipucuyla veya reklam izleyerek)
-• Her bölümde 1–3 yıldız, ana ekranda toplam yıldız
+• Her bölümde 1–3 yıldız; yıldızlı bölüm seçme ekranı
+• Günün bulmacası: her gün yeni bir zorlu bölüm, ilk çözüşte +2 ipucu
 • İsteğe bağlı reklamlar: ipucu için izle; bölüm aralarında nadiren kısa reklam
 • Reklamları kaldırma ve ipucu paketleri
 • Ayarlar'a Gizlilik seçenekleri eklendi (AEA/Birleşik Krallık)

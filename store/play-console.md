@@ -2,17 +2,17 @@
 
 Paket adı: `c0detnr.arrowtrafic` · Sürüm: **1.1.0 (code 2)** · Önceki: 1.0.0 (code 1)
 Yüklenecek dosya: `build/arrowtrafic.aab`
-1.1.0 ile gelenler: AdMob (ödüllü + seyrek geçiş reklamı, UMP izin formu), Google Play Billing (4 ürün), ipucu/günlük hediye/yıldız/geri alma.
+1.1.0 ile gelenler: AdMob (ödüllü + seyrek geçiş reklamı, UMP izin formu), Google Play Billing (4 ürün), ipucu/günlük hediye/yıldız/geri alma, günün bulmacası, yıldızlı bölüm seçme ekranı.
 Kaynak: `docs/monetization-research.md` (§3 politika, §3.7 Türkiye). "(doğrula)" yazan maddeleri Play/AdMob ekranında kontrol et.
 
 ## Sıra (özet)
 1. Ödeme profili + merchant hesabı (§2) → 2. AdMob uygulaması, reklam birimleri, GDPR mesajı (§3) → 3. Web sitesi + gizlilik politikası + app-ads.txt (§4) → 4. 1.1.0 AAB'yi **dahili teste** yükle (§8) → 5. Uygulama içi ürünleri oluştur (§6) → 6. Uygulama içeriği beyanları (§5) → 7. Lisans testçileriyle IAP + reklam testi (§8) → 8. Mağaza metinleri (§1) → 9. Kapalı test / üretim.
 
 ## 1. Ana mağaza girişi (Store listing)
-- Metinler: `store/tr.md` ve `store/en.md` güncellendi ("reklamsız / satın almasız" ifadeleri kaldırıldı; ipucu, günlük hediye, yıldız, geri alma, "Reklamlar ve satın alımlar" bölümü eklendi). Karakter sayıları: başlık 27/30, kısa TR 79/80 · EN 75/80, uzun TR ~2500/4000 · EN ~2550/4000.
-- Yayın notları 1.1.0: her iki dosyadaki "Yayın notları / Release notes" (TR 412/500, EN 381/500).
+- Metinler: `store/tr.md` ve `store/en.md` güncellendi ("reklamsız / satın almasız" ifadeleri kaldırıldı; ipucu, günlük hediye, yıldız, geri alma, günün bulmacası, bölüm seçme, "Reklamlar ve satın alımlar" bölümü eklendi). Karakter sayıları: başlık 27/30, kısa TR 79/80 · EN 75/80, uzun TR ~2600/4000 · EN ~2650/4000.
+- Yayın notları 1.1.0: her iki dosyadaki "Yayın notları / Release notes" (TR 484/500, EN 459/500).
 - **Web sitesi alanı artık zorunlu say:** app-ads.txt bu alan adının kökünde aranır (§4).
-- Grafikler değişmedi: `store/graphics/`, `store/screenshots/` (ekran görüntülerinde "reklamsız" yazısı yok, yeniden üretmek gerekmiyor).
+- **Grafikler 1.1.0 için yeniden üretildi** (`tools/store_screenshots.sh`): yeni başlıklar, ipucu vurgusu, yıldızlı bölüm seçme, günün bulmacası olan ana ekran; dokunmatik görünüm (odak halkası yok). Hepsini **yeniden yükle**: TR ve EN için `store/screenshots/<dil>/` altındaki telefon, 7" ve 10" tablet ve katlanabilir setleri (`foldable-1`, `foldable-folded-10x16`, `foldable-unfolded-1x1`, `foldable-unfolded-4x3`) ile `store/graphics/feature-tr.png` / `feature-en.png`. Eski görüntüleri sil; başlık listesi `store/tr.md` / `store/en.md` ile aynı.
 - Kategori **Oyun → Bulmaca**, etiketler, iletişim e-postası (emirtanir55@gmail.com) aynı.
 - "Reklam içerir" ve "Uygulama içi satın alma" etiketlerini Play kendisi gösterir (reklam beyanı + aktif ürünler sonrası) (doğrula).
 

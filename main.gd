@@ -197,6 +197,10 @@ var shop_rows := {}  # product id -> Button
 var shop_unavailable: Label
 var shop_close: Button
 var shop_return_focus: Control
+## Focus rings show only while the player navigates by keyboard, D-pad or gamepad. After a tap
+## (and from the start on phones) the focused button keeps focus but draws no ring.
+var touch_mode := OS.has_feature("mobile")
+var no_focus_ring := StyleBoxEmpty.new()
 var daily_button: Button
 # Daily puzzle: one level per calendar day, played on the normal board without touching the
 # campaign. `idx` is the level on the board; `campaign_idx` is where the campaign resumes.
@@ -244,6 +248,7 @@ func _ready() -> void:
 		return
 	_build_ui()
 	get_viewport().size_changed.connect(_layout)
+	get_viewport().gui_focus_changed.connect(_sync_focus_ring)
 	Economy.hints_changed.connect(_on_hints_changed)
 	Ads.rewarded_ready_changed.connect(_on_rewarded_ready_changed)
 	IAP.products_updated.connect(_refresh_wallet)
@@ -473,6 +478,38 @@ func _notification(what: int) -> void:
 		_show_home(true)
 	else:
 		get_tree().quit()
+
+
+func _input(e: InputEvent) -> void:
+	if e is InputEventScreenTouch or (e is InputEventMouseButton and e.pressed):
+		set_touch_mode(true)
+	elif (e is InputEventKey and e.pressed) or (e is InputEventJoypadButton and e.pressed) \
+			or (e is InputEventJoypadMotion and absf(e.axis_value) > 0.5):
+		set_touch_mode(false)
+
+
+func set_touch_mode(on: bool) -> void:
+	if on != touch_mode:
+		touch_mode = on
+		_sync_focus_rings()
+
+
+func _sync_focus_rings() -> void:
+	for button in find_children("*", "BaseButton", true, false):
+		_sync_focus_ring(button)
+
+
+## Swaps the button's focus stylebox for an empty one in touch mode and back in keyboard mode.
+## Restyling sets a fresh ring, so call this again after restyling a button.
+func _sync_focus_ring(control: Control) -> void:
+	if not (control is BaseButton):
+		return
+	var current := control.get_theme_stylebox("focus")
+	if touch_mode and current != no_focus_ring:
+		control.set_meta("focus_ring", current)
+		control.add_theme_stylebox_override("focus", no_focus_ring)
+	elif not touch_mode and current == no_focus_ring:
+		control.add_theme_stylebox_override("focus", control.get_meta("focus_ring"))
 
 
 func _unhandled_input(e: InputEvent) -> void:
@@ -874,6 +911,7 @@ func _apply_theme(next_theme: String) -> void:
 	_pad_button(daily_button, 30)
 	_pad_button(daily_puzzle_button, 30)
 	_refresh_daily_puzzle_button()
+	_sync_focus_rings()
 	var badge := _style(palette.ink, 18)
 	badge.set_border_width_all(3)
 	badge.border_color = palette.cream
@@ -1357,6 +1395,7 @@ func _refresh_loss_panel() -> void:
 		_style_neutral_button(panel_retry, palette.cream)
 	else:
 		_style_button(panel_retry)
+	_sync_focus_ring(panel_retry)
 	panel.reset_size()
 	panel.position = (get_viewport_rect().size - panel.size) * 0.5
 
@@ -1986,6 +2025,7 @@ func _style_level_tile(tile: Button, open: bool, current: bool) -> void:
 	locked.set_border_width_all(2)
 	locked.border_color = palette.grid
 	tile.add_theme_stylebox_override("disabled", locked)
+	_sync_focus_ring(tile)
 
 
 func _draw_home_art() -> void:

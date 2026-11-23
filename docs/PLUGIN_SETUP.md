@@ -49,8 +49,9 @@
    (`ads-mobile-sdk` 1.4.0) kendi manifestinde bu izni zaten bildiriyor (AAR'dan kontrol edildi); preset'teki
    kopya garanti içindir, birleşimde tekilleşir. Android 13+ için Play bu izni ister.
    (Poing'in kendi manifestindeki `android.permission.AD_ID` yanlış isim; işe yarayan yukarıdaki.)
-4. `INTERNET` / `ACCESS_NETWORK_STATE` izinleri Ads SDK manifestinden, `com.android.vending.BILLING`
-   Billing kütüphanesinden otomatik birleşir; preset'e eklemeye gerek yok.
+4. ✓ Preset `permissions/internet`, `permissions/access_network_state` ve `permissions/vibrate` (Ayarlar'daki
+   titreşim seçeneği) izinlerini açıkça etkinleştiriyor. İlk ikisi Ads SDK manifestinden de gelir, birleşimde
+   tekilleşir; `com.android.vending.BILLING` Billing kütüphanesinden otomatik birleşir.
 5. `gradle_build/min_sdk` boş (Godot varsayılanı). Gradle "minSdk 24" hatası verirse `"24"` yaz
    (Poing 24+ ister; Godot 4.7 varsayılanı burada doğrulanamadı).
 6. Export → **AAB**. Birleşik manifesti kontrol etmek istersen:

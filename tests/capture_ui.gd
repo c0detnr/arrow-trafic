@@ -29,6 +29,7 @@ func capture() -> void:
 	root.add_child(viewport)
 	var game = load("res://main.tscn").instantiate()
 	viewport.add_child(game)
+	game.set_touch_mode(true)  # store shots show a phone: no keyboard focus rings
 	var state := args[4] if args.size() > 4 else "playing"
 	if state == "levels":
 		for i in level:

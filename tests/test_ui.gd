@@ -202,8 +202,28 @@ func run():
 	check(game.s == current_state and game.nodes == current_nodes)
 	game.settings_button.pressed.emit()
 	check(game.settings_panel.is_visible_in_tree() and game.theme_button.text == "Açık tema")
+	# Focus rings: hidden after a tap (phones), back on a key press; a restyle keeps the mode.
+	var focused: Control = game.get_viewport().gui_get_focus_owner()
+	check(focused == game.theme_button and not game.touch_mode, "desktop runs start in keyboard mode")
+	check(focused.get_theme_stylebox("focus") is StyleBoxFlat)
+	var touch := InputEventScreenTouch.new()
+	touch.pressed = true
+	touch.position = Vector2(-10, -10)
+	game._input(touch)
+	check(game.touch_mode and focused.get_theme_stylebox("focus") is StyleBoxEmpty, "no focus ring after a tap")
+	for button in [game.play_button, game.home_button, game.shop_button, game.level_tiles[0]]:
+		check(button.get_theme_stylebox("focus") is StyleBoxEmpty)
 	game.theme_button.pressed.emit()
 	check(game.theme_name == "light" and game.palette.cream != dark_background)
+	check(game.get_viewport().gui_get_focus_owner() == game.theme_button)
+	check(game.theme_button.get_theme_stylebox("focus") is StyleBoxEmpty, "a theme change keeps rings hidden in touch mode")
+	var arrow_key := InputEventKey.new()
+	arrow_key.keycode = KEY_DOWN
+	arrow_key.pressed = true
+	game._input(arrow_key)
+	var ring := game.theme_button.get_theme_stylebox("focus") as StyleBoxFlat
+	check(not game.touch_mode and ring and ring.border_width_top == 3 and ring.border_color == game.palette.ink, "ring back after a key")
+	check(game.shop_button.get_theme_stylebox("focus") is StyleBoxFlat)
 	check(game.theme_button.text == "Koyu tema" and game.home_screen.color == game.palette.cream)
 	check(game.play_button.get_theme_color("font_focus_color") == game.palette.cream)
 	check(game.settings_button.get_theme_color("icon_focus_color") == game.palette.ink)

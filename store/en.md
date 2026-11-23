@@ -29,7 +29,8 @@ FEATURES
 • Offline game: play on a plane, the subway, anywhere without Wi-Fi
 • Hints: 3 free to start, a daily gift hint, 3 hints on day 7 of your streak, a bonus hint every 10 new levels
 • Undo the losing move (with a hint or a rewarded ad)
-• 1–3 stars per level based on your mistakes, total stars on the home screen
+• 1–3 stars per level based on your mistakes; see your stars in the level select and replay any level
+• Daily puzzle: a new challenging level every day, +2 hints the first time you solve it
 • One-finger portrait gameplay
 • Easy-on-the-eyes dark theme plus a light theme
 • Color-blind friendly: every color also carries its own symbol
@@ -48,17 +49,18 @@ WHO IT'S FOR
 Clear the arrows in the right order, keep the pocket from overflowing and empty the board. Download Arrow Traffic and try the first level now!
 
 # Screenshot captions (used on screenshots)
-1. Clear arrows in the right order
+1. Hints show the right arrow
 2. The next color passes the gate
-3. Don't let the pocket fill up
-4. 1000 levels, fully offline
+3. 1000 levels, collect 3 stars
+4. Offline, at your own pace
 5. Dark and light themes
 
 # Release notes (500)
 New in 1.1.0:
 • Hints: 3 free hints, a daily gift with a day-7 bonus, 1 hint for every 10 new levels
 • Undo your last move when the pocket overflows (with a hint or a rewarded ad)
-• 1–3 stars on every level, total stars on the home screen
+• 1–3 stars on every level, level select with your stars
+• Daily puzzle: a new challenging level every day, +2 hints on your first solve
 • Optional ads: watch for a hint; a short ad only rarely between levels
 • Remove Ads and hint packs
 • New Privacy options in Settings (EEA/UK)
