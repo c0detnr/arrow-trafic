@@ -10,7 +10,6 @@ config_version=5
 
 [admob]
 
-general/android/enabled=true
 general/android/app_id="ca-app-pub-6169304823027068~2885705018"
 
 [application]
@@ -38,12 +37,13 @@ window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/handheld/orientation=1
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/admob/plugin.cfg", "res://addons/android_manifest_fix/plugin.cfg")
+
 [rendering]
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 textures/vram_compression/import_etc2_astc=true
-
-[editor_plugins]
-
-enabled=PackedStringArray("res://addons/android_manifest_fix/plugin.cfg")
+environment/defaults/default_clear_color=Color(0.059, 0.059, 0.059, 1)

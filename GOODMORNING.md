@@ -95,11 +95,11 @@ Tüm commit'ler `claude/sweet-allen-sjh6q9` dalına push edildi.
 
 ### C. Telefonda
 12. [ ] `./tools/build_release.sh` → AAB'yi **dahili teste** yükle.
-    - Lisans test kullanıcısı ekle (Play Console → Ayarlar → Lisans testi).
-    - Cihazda kontrol et:
-      - "Test Ad" etiketli reklam görünüyor mu,
-      - test satın alma çalışıyor mu,
-      - satın alım uygulama silinip kurulunca geri yükleniyor mu.
+	- Lisans test kullanıcısı ekle (Play Console → Ayarlar → Lisans testi).
+	- Cihazda kontrol et:
+	  - "Test Ad" etiketli reklam görünüyor mu,
+	  - test satın alma çalışıyor mu,
+	  - satın alım uygulama silinip kurulunca geri yükleniyor mu.
 
 ---
 
