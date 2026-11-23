@@ -819,6 +819,9 @@ func daily_puzzle(game, economy: Node, ads: Node) -> void:
 		if game.Logic.can_exit(game.s, i):
 			game._tap(center_of(game, i))
 			break
+	game.hint_button.pressed.emit()
+	var paid_hint: int = game.hinted_id
+	check(paid_hint >= 0, "a paid hint is highlighted before the daily trip")
 	var campaign_state: Dictionary = game.s.duplicate(true)
 	var campaign_history: int = game.history.size()
 	check(campaign_history == 1)
@@ -908,9 +911,24 @@ func daily_puzzle(game, economy: Node, ads: Node) -> void:
 	await _win_daily(game)
 	check(economy.get_hints() == hints + 2 and game.daily_puzzle_button.text == "Günün bulmacası ✓ · 2 gün")
 	check(screen.encloses(game.daily_puzzle_button.get_rect()))
+	# Started before midnight, won after: no reward for the new day, and its puzzle stays unsolved.
+	economy.today_provider = func() -> String: return "2026-03-07"
+	game.daily_puzzle_button.pressed.emit()
+	economy.today_provider = func() -> String: return "2026-03-08"
+	var before_midnight: int = economy.get_hints()
+	await _win_daily(game)
+	check(economy.get_hints() == before_midnight and not economy.is_daily_puzzle_done(), "a daily won after midnight credits no day")
+	economy.today_provider = func() -> String: return "2026-03-06"
+	economy.daily_puzzle_last = "2026-03-06"
+	economy.daily_puzzle_streak = 2
+	game._layout_home(Vector2(root.size))
 	# The campaign continues afterwards: Play resumes level 3 and a win advances to level 4.
 	game.play_button.pressed.emit()
 	check(not game.home_screen.visible and game.idx == 2 and game.s == campaign_state and not game.daily_mode)
+	check(game.hinted_id == paid_hint, "the paid hint highlight survives the daily trip")
+	var hints_before: int = economy.get_hints()
+	game.hint_button.pressed.emit()
+	check(economy.get_hints() == hints_before, "re-tapping hint after the trip doesn't charge again")
 	_solve_current(game)
 	check(game.s.status == "won" and game.win_stars > 0 and economy.get_stars(2) > 0, "campaign wins still record stars")
 	# Leaving mid-transition for the daily puzzle still moves the campaign on to level 4.

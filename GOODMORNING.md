@@ -119,5 +119,14 @@ Commit'ler kaybolmadı, bulut oturumunda duruyor. Ama oturum uzun süre boşta k
 
 ---
 
-## Durum (en güncel)
-(gece boyunca güncelleniyor)
+## Durum (en güncel — 23 Kasım sabah)
+- ✅ Tüm özellikler bitti, **21 commit**, `./tools/run_tests.sh` → 6/6 ok.
+- ✅ İki kod incelemesinde bulunan hatalar düzeltildi. Her biri regresyon testli.
+  Testlerin işe yaradığı da kontrol edildi: düzeltme geri alınınca testler kırılıyor.
+- ✅ Mağaza ekran görüntüleri (TR/EN, telefon/tablet/katlanabilir) ve öne çıkan görseller yeni arayüzle yeniden üretildi → Play Console'a yeniden yükle.
+- ⚠️ **Push yapılamadı** (GitHub 403) → 0. maddeyi yap, sonra bana "push et" de.
+- ⚠️ **Android APK derlemesi doğrulanmadı.** Deneme yarıda durduruldu. Kesin olan tek şey: AdMob eklentisinin 13 GDScript dosyası Godot 4.7'de sorunsuz yükleniyor.
+  İlk dahili test derlemesinde Gradle "minSdk" hatası verirse `export_presets.cfg` → `gradle_build/min_sdk="24"` yap.
+- Bilinçli olarak yapılmayanlar (küçük):
+  - Kaybedilmiş bir bölümden günün bulmacasına gidip dönünce bölüm baştan başlar, geri alma teklifi kaybolur.
+  - Kazanma animasyonu sırasında ana ekrana basılırsa bölüm etiketi bir sonraki açılışta güncellenir.

@@ -207,6 +207,7 @@ var daily_button: Button
 var daily_puzzle_button: Button
 var daily_mode := false
 var campaign_idx := 0
+var daily_date := ""  # date whose daily puzzle is on the board
 var campaign_resume := {}  # {"s", "history"} of a campaign board left mid-play, else empty
 var restore_button: Button
 var privacy_button: Button
@@ -577,7 +578,8 @@ func _tap(pos: Vector2) -> void:
 		t.tween_callback(n.queue_free)
 		if r == "won" and daily_mode:
 			win_stars = 0  # stars are campaign-only
-			var granted := Economy.complete_daily_puzzle()
+			# A puzzle started before midnight belongs to that day; don't credit the new day with it.
+			var granted := Economy.complete_daily_puzzle() if Economy._today() == daily_date else 0
 			if granted > 0:
 				_toast(_localized("+%d ipucu · Günün bulmacası") % granted)
 			_celebrate_win(t)
@@ -622,9 +624,13 @@ func _celebrate_win(t: Tween) -> void:
 	# Interstitial (Ads applies its own pacing) only while the board is gone and input is locked.
 	win_ad_shown = false
 	t.tween_callback(func():
+		# Listen before showing, so a backend that closes synchronously can't leave the board locked.
+		var resume := _hold_for_interstitial(t)
 		win_ad_shown = Ads.on_level_cleared(Economy.levels_cleared)
-		if win_ad_shown:
-			_hold_for_interstitial(t))
+		if not win_ad_shown:
+			if Ads.interstitial_closed.is_connected(resume):
+				Ads.interstitial_closed.disconnect(resume)
+			resume.call())
 	t.tween_callback(func(): start((idx + 1) % levels.size(), true))
 	t.tween_property(board_layer, "modulate:a", 1.0, 0.35)
 	t.parallel().tween_method(_move_board, 18.0, 0.0, 0.35).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
@@ -638,7 +644,7 @@ func _celebrate_win(t: Tween) -> void:
 
 
 ## Pauses the win transition until the interstitial closes (or the safety timeout passes).
-func _hold_for_interstitial(t: Tween) -> void:
+func _hold_for_interstitial(t: Tween) -> Callable:
 	t.pause()
 	var resume := func():
 		# start() kills the tween if the player left meanwhile; a finished tween is invalid too.
@@ -648,7 +654,8 @@ func _hold_for_interstitial(t: Tween) -> void:
 	get_tree().create_timer(interstitial_timeout).timeout.connect(func():
 		if Ads.interstitial_closed.is_connected(resume):
 			Ads.interstitial_closed.disconnect(resume)
-		resume.call())
+			resume.call())
+	return resume
 
 
 ## Asks the optional Review service (never alongside an interstitial); it applies its own pacing.
@@ -1531,8 +1538,9 @@ func _start_daily_puzzle() -> void:
 	var status: String = s.get("status", "")
 	# A campaign win still in its transition resumes on the next level; a loss replays the level.
 	campaign_idx = (idx + 1) % levels.size() if status == "won" else idx
-	campaign_resume = {"s": s, "history": history} if status == "playing" else {}
+	campaign_resume = {"s": s, "history": history, "hinted": hinted_id if nodes.has(hinted_id) else -1} if status == "playing" else {}
 	daily_mode = true
+	daily_date = Economy._today()
 	start(Economy.daily_puzzle_index(levels.size()))
 	_show_home(false)
 
@@ -1546,6 +1554,9 @@ func _leave_daily_puzzle() -> void:
 		start(campaign_idx)
 	else:
 		_load_board(campaign_idx, resume.s, resume.history)
+		hinted_id = int(resume.get("hinted", -1))
+		if nodes.has(hinted_id):
+			nodes[hinted_id].queue_redraw()
 
 
 # --- Toast ---

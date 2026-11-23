@@ -236,7 +236,7 @@ func test_daily_puzzle() -> void:
 	file.close()
 	check(saved.daily_puzzle_last == "2027-01-04" and int(saved.daily_puzzle_streak) == 2, "daily puzzle: keys in economy.json")
 	# Older saves without the keys (or with bad values) load as never solved.
-	for text in ['{"hints": 4, "streak": 2}', '{"daily_puzzle_last": 5, "daily_puzzle_streak": "x"}']:
+	for text in ['{"hints": 4, "streak": 2}', '{"daily_puzzle_last": 5, "daily_puzzle_streak": "x"}', '{"daily_puzzle_last": "x", "last_daily": "zzz"}']:
 		file = FileAccess.open(TEST_SAVE, FileAccess.WRITE)
 		file.store_string(text)
 		file.close()
@@ -244,6 +244,7 @@ func test_daily_puzzle() -> void:
 		check(economy.daily_puzzle_last == "" and economy.daily_puzzle_streak == 0 and not economy.is_daily_puzzle_done(),
 			"daily puzzle: backward compatible load of %s" % text)
 		check(economy.get_hints() == int(JSON.parse_string(text).get("hints", 3)), "daily puzzle: other fields load from %s" % text)
+		check(economy.last_daily == "" and economy.can_claim_daily(), "junk dates are dropped on load: %s" % text)
 	economy.reset_for_tests()
 	fake_today = "2026-03-01"
 

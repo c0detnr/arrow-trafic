@@ -73,10 +73,10 @@ func load_data() -> void:
 		return
 	hints = maxi(0, int(_num(data.get("hints"), STARTING_HINTS)))
 	ads_removed = data.get("ads_removed") is bool and data.get("ads_removed")
-	last_daily = str(data.get("last_daily", "")) if data.get("last_daily") is String else ""
+	last_daily = _iso_or_empty(data.get("last_daily"))
 	streak = maxi(0, int(_num(data.get("streak"), 0)))
 	levels_cleared = maxi(0, int(_num(data.get("levels_cleared"), 0)))
-	daily_puzzle_last = str(data.get("daily_puzzle_last")) if data.get("daily_puzzle_last") is String else ""
+	daily_puzzle_last = _iso_or_empty(data.get("daily_puzzle_last"))
 	daily_puzzle_streak = maxi(0, int(_num(data.get("daily_puzzle_streak"), 0)))
 	var stars = data.get("best_stars")
 	if stars is Dictionary:
@@ -308,3 +308,11 @@ func mark_token(token: String) -> void:
 	while consumed_tokens.size() > MAX_TOKENS:
 		consumed_tokens.remove_at(0)
 	save_data()
+
+
+## A saved date only if it is YYYY-MM-DD; junk would compare above every real date and lock the dailies.
+static func _iso_or_empty(v) -> String:
+	if not v is String:
+		return ""
+	var re := RegEx.create_from_string("^\\d{4}-\\d{2}-\\d{2}$")
+	return v if re.search(v) else ""
